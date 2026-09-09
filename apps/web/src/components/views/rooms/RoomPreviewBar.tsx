@@ -35,6 +35,9 @@ import { ModuleApi } from "../../../modules/Api.ts";
 
 const MemberEventHtmlReasonField = "io.element.html_reason";
 
+/** The most a knock reason may carry, so that a server which rejects longer ones is never reached. */
+const KNOCK_REASON_MAX_LENGTH = 500;
+
 enum MessageCase {
     NotLoggedIn = "NotLoggedIn",
     Joining = "Joining",
@@ -102,6 +105,8 @@ interface IProps {
     knocked?: boolean;
     onSubmitAskToJoin?(reason?: string): void;
     onCancelAskToJoin?(): void;
+    /** Whether the user withdrew their last request to join this room. */
+    askToJoinCancelled?: boolean;
 }
 
 interface IState {
@@ -614,17 +619,29 @@ class RoomPreviewBar extends React.Component<IProps, IState> {
 
                 const avatar = <RoomAvatar room={this.props.room} oobData={this.props.oobData} />;
                 subTitle = [avatar, _t("room|knock_subtitle")];
+                if (this.props.askToJoinCancelled) {
+                    subTitle = [_t("room|knock_cancelled"), ...subTitle];
+                }
 
+                const reason = this.state.reason ?? "";
                 reasonElement = (
-                    <Field
-                        autoFocus
-                        className="mx_RoomPreviewBar_fullWidth"
-                        element="textarea"
-                        onChange={this.onChangeReason}
-                        placeholder={_t("room|knock_message_field_placeholder")}
-                        type="text"
-                        value={this.state.reason ?? ""}
-                    />
+                    <div className="mx_RoomPreviewBar_reason mx_RoomPreviewBar_fullWidth">
+                        <Field
+                            autoFocus
+                            element="textarea"
+                            maxLength={KNOCK_REASON_MAX_LENGTH}
+                            onChange={this.onChangeReason}
+                            placeholder={_t("room|knock_message_field_placeholder")}
+                            type="text"
+                            value={reason}
+                        />
+                        <div className="mx_RoomPreviewBar_reason_counter">
+                            {_t("room|knock_message_field_counter", {
+                                current: reason.length,
+                                max: KNOCK_REASON_MAX_LENGTH,
+                            })}
+                        </div>
+                    </div>
                 );
 
                 primaryActionHandler = () =>

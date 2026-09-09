@@ -75,6 +75,7 @@ const RoomContext = createContext<RoomContextType>({
     msc3946ProcessDynamicPredecessor: false,
     canAskToJoin: false,
     promptAskToJoin: false,
+    askToJoinCancelled: false,
     viewRoomOpts: { buttons: [] },
     isRoomEncrypted: null,
     // roomViewStore should always be present as it is passed to RoomView constructor.

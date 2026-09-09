@@ -85,6 +85,7 @@ export function getRoomContext(room: Room, override: Partial<RoomContextType>): 
         msc3946ProcessDynamicPredecessor: false,
         canAskToJoin: false,
         promptAskToJoin: false,
+        askToJoinCancelled: false,
         viewRoomOpts: { buttons: [] },
         isRoomEncrypted: false,
         ...override,

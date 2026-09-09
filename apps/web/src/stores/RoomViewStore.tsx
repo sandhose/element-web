@@ -45,6 +45,7 @@ import { type JoinRoomReadyPayload } from "../dispatcher/payloads/JoinRoomReadyP
 import { type JoinRoomErrorPayload } from "../dispatcher/payloads/JoinRoomErrorPayload";
 import { type ViewRoomErrorPayload } from "../dispatcher/payloads/ViewRoomErrorPayload";
 import ErrorDialog from "../components/views/dialogs/ErrorDialog";
+import QuestionDialog from "../components/views/dialogs/QuestionDialog";
 import { type ActiveRoomChangedPayload } from "../dispatcher/payloads/ActiveRoomChangedPayload";
 import SettingsStore from "../settings/SettingsStore";
 import { awaitRoomDownSync } from "../utils/RoomUpgrade";
@@ -120,6 +121,10 @@ interface State {
     viewingCall: boolean;
 
     promptAskToJoin: boolean;
+    /**
+     * Whether the user withdrew their request to join the room being viewed
+     */
+    askToJoinCancelled: boolean;
 
     viewRoomOpts: ViewRoomOpts;
 }
@@ -143,6 +148,7 @@ const INITIAL_STATE: State = {
     wasContextSwitch: false,
     viewingCall: false,
     promptAskToJoin: false,
+    askToJoinCancelled: false,
     viewRoomOpts: { buttons: [] },
 };
 
@@ -374,7 +380,7 @@ export class RoomViewStore extends EventEmitter {
                 break;
             }
             case Action.CancelAskToJoin: {
-                this.cancelAskToJoin(payload as CancelAskToJoinPayload);
+                void this.cancelAskToJoin(payload as CancelAskToJoinPayload);
                 break;
             }
             case Action.RoomLoaded: {
@@ -493,6 +499,7 @@ export class RoomViewStore extends EventEmitter {
                 shouldPeek: payload.should_peek === undefined ? true : payload.should_peek,
                 // have we sent a join request for this room and are waiting for a response?
                 joining: payload.joining || false,
+                askToJoinCancelled: false,
                 // Reset replyingToEvent because we don't want cross-room because bad UX
                 replyingToEvent: null,
                 viaServers: payload.via_servers ?? [],
@@ -849,6 +856,11 @@ export class RoomViewStore extends EventEmitter {
         return this.state.promptAskToJoin;
     }
 
+    /** Whether the user withdrew their request to join the room being viewed */
+    public hasCancelledAskToJoin(): boolean {
+        return this.state.askToJoinCancelled;
+    }
+
     /**
      * Submits a request to join a room by sending a knock request.
      *
@@ -856,6 +868,7 @@ export class RoomViewStore extends EventEmitter {
      * @returns {void}
      */
     private submitAskToJoin(payload: SubmitAskToJoinPayload): void {
+        this.setState({ askToJoinCancelled: false });
         MatrixClientPeg.safeGet()
             .knockRoom(payload.roomId, { viaServers: this.state.viaServers, ...payload.opts })
             .catch((err: MatrixError) =>
@@ -868,20 +881,35 @@ export class RoomViewStore extends EventEmitter {
     }
 
     /**
-     * Cancels a request to join a room by sending a leave request.
+     * Withdraw a request to join a room, once the user has confirmed it. Leaving alone would keep
+     * the room, and the request with it, in the room list; forgetting is what takes it away.
      *
      * @param {CancelAskToJoinPayload} payload - The payload containing information to cancel the request.
-     * @returns {void}
      */
-    private cancelAskToJoin(payload: CancelAskToJoinPayload): void {
-        MatrixClientPeg.safeGet()
-            .leave(payload.roomId)
-            .catch((err: MatrixError) =>
-                Modal.createDialog(ErrorDialog, {
-                    title: _t("room|error_cancel_knock_title"),
-                    description: err.message,
-                }),
-            );
+    private async cancelAskToJoin(payload: CancelAskToJoinPayload): Promise<void> {
+        const { finished } = Modal.createDialog(QuestionDialog, {
+            title: _t("room|knock_cancel_dialog_title"),
+            description: _t("room|knock_cancel_dialog_description"),
+            button: _t("room|knock_cancel_dialog_confirm"),
+            cancelButton: _t("room|knock_cancel_dialog_keep"),
+            danger: true,
+        });
+        const [confirmed] = await finished;
+        if (!confirmed) return;
+
+        const client = MatrixClientPeg.safeGet();
+        try {
+            await client.leave(payload.roomId);
+            await client.forget(payload.roomId);
+        } catch (err) {
+            Modal.createDialog(ErrorDialog, {
+                title: _t("room|error_cancel_knock_title"),
+                description: (err as MatrixError).message,
+            });
+            return;
+        }
+
+        if (this.state.roomId === payload.roomId) this.setState({ askToJoinCancelled: true });
     }
 
     /**

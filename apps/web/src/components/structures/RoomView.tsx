@@ -290,6 +290,7 @@ export interface IRoomState {
 
     canAskToJoin: boolean;
     promptAskToJoin: boolean;
+    askToJoinCancelled: boolean;
 
     viewRoomOpts: ViewRoomOpts;
 }
@@ -506,6 +507,7 @@ export class RoomView extends React.Component<IRoomProps, IRoomState> {
             msc3946ProcessDynamicPredecessor: SettingsStore.getValue("feature_dynamic_room_predecessors"),
             canAskToJoin: this.askToJoinEnabled,
             promptAskToJoin: false,
+            askToJoinCancelled: false,
             viewRoomOpts: { buttons: [] },
             isRoomEncrypted: null,
         };
@@ -658,6 +660,7 @@ export class RoomView extends React.Component<IRoomProps, IRoomState> {
             initialEventId: undefined, // default to clearing this, will get set later in the method if needed
             showRightPanel: roomId ? this.context.rightPanelStore.isOpenForRoom(roomId) : false,
             promptAskToJoin: promptAskToJoin,
+            askToJoinCancelled: roomViewStore.hasCancelledAskToJoin(),
             viewRoomOpts: viewRoomOpts,
         };
 
@@ -2271,6 +2274,7 @@ export class RoomView extends React.Component<IRoomProps, IRoomState> {
                                 signUrl={this.props.threepidInvite?.signUrl}
                                 roomId={this.state.roomId}
                                 promptAskToJoin={this.state.promptAskToJoin}
+                                askToJoinCancelled={this.state.askToJoinCancelled}
                                 onSubmitAskToJoin={this.onSubmitAskToJoin}
                                 onCancelAskToJoin={this.onCancelAskToJoin}
                             />
@@ -2356,6 +2360,7 @@ export class RoomView extends React.Component<IRoomProps, IRoomState> {
                             room={this.state.room}
                             canAskToJoinAndMembershipIsLeave={myMembership === KnownMembership.Leave}
                             promptAskToJoin={this.state.promptAskToJoin}
+                            askToJoinCancelled={this.state.askToJoinCancelled}
                             knocked={myMembership === KnownMembership.Knock}
                             onSubmitAskToJoin={this.onSubmitAskToJoin}
                             onCancelAskToJoin={this.onCancelAskToJoin}

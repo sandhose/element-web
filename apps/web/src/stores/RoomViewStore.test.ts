@@ -140,6 +140,7 @@ describe("RoomViewStore", function () {
         isInitialSyncComplete: vi.fn().mockResolvedValue(false),
         relations: vi.fn(),
         knockRoom: vi.fn(),
+        forget: vi.fn(),
         leave: vi.fn(),
         setRoomAccountData: vi.fn(),
         getAccountData: vi.fn(),
@@ -714,24 +715,59 @@ describe("RoomViewStore", function () {
     });
 
     describe("Action.CancelAskToJoin", () => {
+        const answerConfirmation = (confirmed: boolean) =>
+            vi.mocked(Modal).createDialog.mockReturnValue({
+                finished: Promise.resolve([confirmed]),
+                close: vi.fn(),
+            } as unknown as ReturnType<typeof Modal.createDialog>);
+
         beforeEach(async () => {
             vi.spyOn(mockClient, "knockRoom").mockResolvedValue({ room_id: roomId });
+            vi.spyOn(mockClient, "leave").mockResolvedValue({});
+            mockClient.forget.mockResolvedValue({});
             await dispatchSubmitAskToJoin(roomId);
         });
 
-        it("calls leave()", async () => {
-            vi.spyOn(mockClient, "leave").mockResolvedValue({});
+        it("asks for confirmation before withdrawing the request", async () => {
+            answerConfirmation(false);
             await dispatchCancelAskToJoin(roomId);
+            await flushPromises();
 
-            expect(mockClient.leave).toHaveBeenCalledWith(roomId);
+            expect(vi.mocked(Modal).createDialog.mock.calls[0][1]).toEqual(
+                expect.objectContaining({ title: "Cancel request to join" }),
+            );
+            expect(mockClient.leave).not.toHaveBeenCalled();
         });
 
-        it("calls leave() and shows an error dialog", async () => {
+        it("leaves and forgets the room once the user confirms", async () => {
+            answerConfirmation(true);
+            await dispatchCancelAskToJoin(roomId);
+            await flushPromises();
+
+            expect(mockClient.leave).toHaveBeenCalledWith(roomId);
+            expect(mockClient.forget).toHaveBeenCalledWith(roomId);
+        });
+
+        it("reports the cancellation so the bar can offer to ask again", async () => {
+            answerConfirmation(true);
+            dis.dispatch({ action: Action.ViewRoom, room_id: roomId });
+            await untilDispatch(Action.ActiveRoomChanged, dis);
+            expect(roomViewStore.hasCancelledAskToJoin()).toBe(false);
+
+            await dispatchCancelAskToJoin(roomId);
+            await flushPromises();
+
+            expect(roomViewStore.hasCancelledAskToJoin()).toBe(true);
+        });
+
+        it("shows an error dialog when leaving fails", async () => {
+            answerConfirmation(true);
             const error = new MatrixError();
             vi.spyOn(mockClient, "leave").mockRejectedValue(error);
             await dispatchCancelAskToJoin(roomId);
+            await flushPromises();
 
-            expect(mockClient.leave).toHaveBeenCalledWith(roomId);
+            expect(mockClient.forget).not.toHaveBeenCalled();
             expect(Modal.createDialog).toHaveBeenCalledWith(ErrorDialog, {
                 description: error.message,
                 title: "Failed to cancel",

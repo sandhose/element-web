@@ -496,6 +496,25 @@ describe("<RoomPreviewBar />", () => {
 
             expect(onSubmitAskToJoin).toHaveBeenCalledWith(reason);
         });
+
+        it("caps the reason at 500 characters and counts what has been typed", () => {
+            const component = getComponent({ promptAskToJoin: true });
+            const counter = () => component.container.querySelector(".mx_RoomPreviewBar_reason_counter")?.textContent;
+
+            const textarea = component.container.querySelector("textarea")!;
+            expect(textarea.maxLength).toEqual(500);
+            expect(counter()).toEqual("0/500");
+
+            fireEvent.change(textarea, { target: { value: "let me in" } });
+            expect(counter()).toEqual("9/500");
+        });
+
+        it("says a withdrawn request was cancelled, above the offer to ask again", () => {
+            const component = getComponent({ promptAskToJoin: true, askToJoinCancelled: true });
+
+            expect(getMessage(component)?.textContent).toContain("Request to join cancelled");
+            expect(getPrimaryActionButton(component)?.textContent).toEqual("Request access");
+        });
     });
 
     describe("message case Knocked", () => {
