@@ -56,6 +56,7 @@ describe("MemberListStore", () => {
                 event_id: "$2",
             }),
         ]);
+        room.updateMyMembership(KnownMembership.Join);
         room.recalculate();
         vi.mocked(client.getRoom).mockImplementation((r: string | undefined): Room | null => {
             if (r === roomId) {
@@ -195,6 +196,21 @@ describe("MemberListStore", () => {
             const { joined } = await store.loadMemberList(roomId);
             expect(joined).toEqual([room.getMember(alice)]);
             expect(client.members).not.toHaveBeenCalled();
+        });
+
+        it("does not request the members of a room we are not in", async () => {
+            room.updateMyMembership(KnownMembership.Leave);
+
+            const { joined } = await store.loadMemberList(roomId);
+            expect(joined).toEqual([room.getMember(alice)]);
+            expect(client.members).not.toHaveBeenCalled();
+        });
+
+        it("makes one request for two concurrent loads", async () => {
+            vi.mocked(client.members).mockResolvedValue({ chunk: [] });
+
+            await Promise.all([store.loadMemberList(roomId), store.loadMemberList(roomId)]);
+            expect(client.members).toHaveBeenCalledTimes(1);
         });
     });
 });

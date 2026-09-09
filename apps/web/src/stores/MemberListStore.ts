@@ -25,6 +25,8 @@ export class MemberListStore {
     private readonly sortNames = new Map<string, string>();
     // list of room IDs that have been lazy loaded
     private readonly loadedRooms = new Set<string>();
+    // in-flight member loads by room ID
+    private readonly loadsInFlight = new Map<string, Promise<RoomMember[]>>();
 
     private collator?: Intl.Collator;
 
@@ -64,12 +66,28 @@ export class MemberListStore {
         };
     }
 
-    private async loadMembers(roomId: string): Promise<Array<RoomMember>> {
+    private loadMembers(roomId: string): Promise<Array<RoomMember>> {
         const room = this.stores.client!.getRoom(roomId);
         if (!room) {
-            return [];
+            return Promise.resolve([]);
         }
 
+        // The server refuses GET /rooms/{roomId}/members for a room we are not in, so the state we
+        // already have is all we will get.
+        if (!room.canLoadMembers()) {
+            return Promise.resolve(this.loadMembersInRoom(room));
+        }
+
+        const inFlight = this.loadsInFlight.get(roomId);
+        if (inFlight) {
+            return inFlight;
+        }
+        const load = this.fetchMembers(roomId, room).finally(() => this.loadsInFlight.delete(roomId));
+        this.loadsInFlight.set(roomId, load);
+        return load;
+    }
+
+    private async fetchMembers(roomId: string, room: Room): Promise<Array<RoomMember>> {
         if (this.loadedRooms.has(roomId) || !(await this.isLazyLoadingEnabled(roomId))) {
             // nice and easy, we must already have all the members so just return them.
             return this.loadMembersInRoom(room);

@@ -20,6 +20,7 @@ import {
     RoomMember,
     User,
     EventType,
+    HistoryVisibility,
     RoomStateEvent,
 } from "matrix-js-sdk/src/matrix";
 import { KnownMembership } from "matrix-js-sdk/src/types";
@@ -116,6 +117,7 @@ export async function renderMemberList(
         getInviteForThreePidToken: vi.fn().mockReturnValue(null),
         getInvitedMemberCount: vi.fn().mockReturnValue(0),
         getJoinedMemberCount: vi.fn().mockReturnValue(adminUsers.length + moderatorUsers.length + defaultUsers.length),
+        getHistoryVisibility: vi.fn().mockReturnValue(HistoryVisibility.Shared),
         on: vi.fn(),
         off: vi.fn(),
     } as unknown as RoomState;
