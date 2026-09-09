@@ -42,7 +42,7 @@ import { Action } from "../../dispatcher/actions";
 import type { ViewRoomPayload } from "../../dispatcher/payloads/ViewRoomPayload";
 import PosthogTrackers from "../../PosthogTrackers";
 import { type Call, CallEvent } from "../../models/Call";
-import RoomListStoreV3 from "../../stores/room-list-v3/RoomListStoreV3";
+import RoomListStoreV3, { isRoomOnScreen } from "../../stores/room-list-v3/RoomListStoreV3";
 import { getCustomSectionData, isDefaultSectionTag } from "../../stores/room-list-v3/section";
 import { _t } from "../../languageHandler";
 import { fetchUserStatus } from "../../utils/userStatus";
@@ -338,8 +338,10 @@ export class RoomListItemViewModel
         const isLowPriority = Boolean(roomTags[DefaultTagID.LowPriority]);
         const isArchived = Boolean(roomTags[DefaultTagID.Archived]);
 
-        // More options menu state
-        const showMoreOptionsMenu = hasAccessToOptionsMenu(room);
+        const previewState = RoomListItemViewModel.computePreviewState(room);
+
+        // More options menu state; none of it applies to a room the user is only previewing.
+        const showMoreOptionsMenu = hasAccessToOptionsMenu(room) && previewState !== "preview";
         const showNotificationMenu = hasAccessToNotificationMenu(room, client.isGuest(), isArchived);
 
         // Notification levels
@@ -420,16 +422,19 @@ export class RoomListItemViewModel
             sections,
             areSectionsEnabled,
             canChangeSection,
-            previewState: RoomListItemViewModel.computePreviewState(room),
+            previewState,
         };
     }
 
     /**
-     * Where the user's request to join this room has got to, or undefined if they made none.
+     * Why this room is listed without a joined membership, or undefined if the user is a member.
      */
     private static computePreviewState(room: Room): RoomPreviewState | undefined {
         if (room.getMyMembership() === KnownMembership.Knock) return "pending";
         if (isKnockDenied(room)) return "denied";
+        // Read why the room is on screen rather than the store's answer to it: the store learns of
+        // a withdrawn knock through the dispatcher, after the membership change has landed here.
+        if (room.getMyMembership() === KnownMembership.Leave && isRoomOnScreen(room.roomId)) return "preview";
         return undefined;
     }
 

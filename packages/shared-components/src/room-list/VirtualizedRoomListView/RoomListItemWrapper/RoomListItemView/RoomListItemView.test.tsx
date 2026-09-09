@@ -134,6 +134,7 @@ describe("<RoomListItemView />", () => {
     });
 
     it.each([
+        ["preview", "Preview"],
         ["pending", "Pending"],
         ["denied", "Declined"],
     ] as const)("labels a %s row", (previewState, label) => {

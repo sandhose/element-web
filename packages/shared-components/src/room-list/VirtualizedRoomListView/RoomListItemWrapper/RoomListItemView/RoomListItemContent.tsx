@@ -19,6 +19,8 @@ import { _t } from "../../../../core/i18n/i18n";
 
 function getPreviewStateLabel(previewState: RoomPreviewState): string {
     switch (previewState) {
+        case "preview":
+            return _t("room_list|preview_state|preview");
         case "pending":
             return _t("room_list|preview_state|pending");
         case "denied":

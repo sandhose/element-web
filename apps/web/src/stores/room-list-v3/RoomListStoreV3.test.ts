@@ -12,7 +12,7 @@ import { EventType, KnownMembership, MatrixEvent, Room } from "matrix-js-sdk/src
 import { logger } from "matrix-js-sdk/src/logger";
 import { mkEvent, mkMessage, mkSpace, mkStubRoom, stubClient, upsertRoomStateEvents } from "test-utils";
 
-import type { MatrixClient } from "matrix-js-sdk/src/matrix";
+import type { MatrixClient, RoomMember } from "matrix-js-sdk/src/matrix";
 import type { RoomNotificationState } from "../notifications/RoomNotificationState";
 import {
     LISTS_UPDATE_EVENT,
@@ -1799,6 +1799,210 @@ describe("RoomListStoreV3", () => {
                 .slice(90)
                 .map((r) => r.roomId);
             expect(result).toEqual(expectedRoomIds);
+        });
+    });
+
+    describe("Preview room", () => {
+        function mockPreviewContext(viewedRoomId: string | null, previewRoomIds: string[] = []): void {
+            vi.spyOn(SDKContextClass.instance, "roomViewStore", "get").mockReturnValue({
+                getRoomId: () => viewedRoomId,
+            } as unknown as SDKContextClass["roomViewStore"]);
+            vi.spyOn(SDKContextClass.instance, "roomPreviewStore", "get").mockReturnValue({
+                isPreviewRoom: (roomId: string) => previewRoomIds.includes(roomId),
+            } as unknown as SDKContextClass["roomPreviewStore"]);
+        }
+
+        async function getStoreWithPreviewRoom() {
+            const { client, rooms, store, dispatcher } = await getRoomListStore();
+            const previewRoom = mkStubRoom("!preview:matrix.org", "Preview Room", client);
+            vi.mocked(previewRoom.getMyMembership).mockReturnValue(KnownMembership.Leave);
+            return { client, rooms, store, dispatcher, previewRoom };
+        }
+
+        async function getStoreWithListedPreviewRoom() {
+            const result = await getStoreWithPreviewRoom();
+            mockPreviewContext(result.previewRoom.roomId);
+            result.dispatcher.dispatch({ action: "MatrixActions.Room", room: result.previewRoom }, true);
+            return result;
+        }
+
+        it("Room without membership is listed while it is the room being viewed", async () => {
+            const { store, previewRoom } = await getStoreWithListedPreviewRoom();
+            expect(store.getSortedRooms()).toContain(previewRoom);
+        });
+
+        it("Room without membership is listed when the preview store hydrated it", async () => {
+            const { store, dispatcher, previewRoom } = await getStoreWithPreviewRoom();
+            mockPreviewContext(null, [previewRoom.roomId]);
+
+            dispatcher.dispatch({ action: "MatrixActions.Room", room: previewRoom }, true);
+
+            expect(store.getSortedRooms()).toContain(previewRoom);
+        });
+
+        it("Room without membership is not listed when it is neither viewed nor previewed", async () => {
+            const { store, dispatcher, previewRoom } = await getStoreWithPreviewRoom();
+            mockPreviewContext("!other:matrix.org");
+
+            dispatcher.dispatch({ action: "MatrixActions.Room", room: previewRoom }, true);
+
+            expect(store.getSortedRooms()).not.toContain(previewRoom);
+        });
+
+        it("Joined room arriving in the store is not treated as a preview", async () => {
+            const { store, dispatcher, previewRoom } = await getStoreWithPreviewRoom();
+            vi.mocked(previewRoom.getMyMembership).mockReturnValue(KnownMembership.Join);
+            mockPreviewContext(previewRoom.roomId);
+
+            dispatcher.dispatch({ action: "MatrixActions.Room", room: previewRoom }, true);
+
+            expect(store.getSortedRooms()).not.toContain(previewRoom);
+        });
+
+        it("Previewed room is removed when it leaves the client store", async () => {
+            const { store, dispatcher, previewRoom } = await getStoreWithListedPreviewRoom();
+
+            const fn = vi.fn();
+            store.on(LISTS_UPDATE_EVENT, fn);
+            dispatcher.dispatch({ action: "MatrixActions.DeleteRoom", roomId: previewRoom.roomId }, true);
+
+            expect(fn).toHaveBeenCalled();
+            expect(store.getSortedRooms()).not.toContain(previewRoom);
+        });
+
+        it.each([KnownMembership.Knock, KnownMembership.Join])(
+            "Previewed room is re-inserted rather than added again when membership becomes %s",
+            async (membership) => {
+                const { store, dispatcher, previewRoom } = await getStoreWithListedPreviewRoom();
+                const errorSpy = vi.spyOn(logger, "error");
+                vi.mocked(previewRoom.getMyMembership).mockReturnValue(membership);
+
+                dispatcher.dispatch(
+                    {
+                        action: "MatrixActions.Room.myMembership",
+                        oldMembership: KnownMembership.Leave,
+                        membership,
+                        room: previewRoom,
+                    },
+                    true,
+                );
+
+                expect(errorSpy).not.toHaveBeenCalled();
+                expect(store.getSortedRooms().filter((r) => r === previewRoom)).toHaveLength(1);
+            },
+        );
+
+        it("Previewed room stays listed as a preview when its knock is withdrawn", async () => {
+            const { store, dispatcher, previewRoom } = await getStoreWithListedPreviewRoom();
+            vi.spyOn(SettingsStore, "getValue").mockImplementation((setting) => setting === "feature_ask_to_join");
+            mockPreviewContext(previewRoom.roomId, [previewRoom.roomId]);
+
+            // Knocking takes the row off its preview label, and the withdrawal puts it back.
+            vi.mocked(previewRoom.getMyMembership).mockReturnValue(KnownMembership.Knock);
+            dispatcher.dispatch(
+                {
+                    action: "MatrixActions.Room.myMembership",
+                    oldMembership: KnownMembership.Leave,
+                    membership: KnownMembership.Knock,
+                    room: previewRoom,
+                },
+                true,
+            );
+
+            vi.mocked(previewRoom.getMyMembership).mockReturnValue(KnownMembership.Leave);
+            dispatcher.dispatch(
+                {
+                    action: "MatrixActions.Room.myMembership",
+                    oldMembership: KnownMembership.Knock,
+                    membership: KnownMembership.Leave,
+                    room: previewRoom,
+                },
+                true,
+            );
+
+            expect(store.getSortedRooms()).toContain(previewRoom);
+        });
+
+        it("Room being viewed stays listed as a preview when a knock it was listed by is withdrawn", async () => {
+            const { store, rooms, dispatcher } = await getRoomListStore();
+            vi.spyOn(SettingsStore, "getValue").mockImplementation((setting) => setting === "feature_ask_to_join");
+
+            // A room which reached the list through /sync at knock, so nothing hydrated it.
+            const room = rooms[37];
+            mockPreviewContext(room.roomId);
+            vi.mocked(room.getMyMembership).mockReturnValue(KnownMembership.Leave);
+
+            dispatcher.dispatch(
+                {
+                    action: "MatrixActions.Room.myMembership",
+                    oldMembership: KnownMembership.Knock,
+                    membership: KnownMembership.Leave,
+                    room,
+                },
+                true,
+            );
+
+            expect(store.getSortedRooms()).toContain(room);
+        });
+
+        it("Room which is not on screen is removed when a knock it was listed by is withdrawn", async () => {
+            const { store, rooms, dispatcher } = await getRoomListStore();
+            vi.spyOn(SettingsStore, "getValue").mockImplementation((setting) => setting === "feature_ask_to_join");
+
+            const room = rooms[37];
+            mockPreviewContext("!other:matrix.org");
+            vi.mocked(room.getMyMembership).mockReturnValue(KnownMembership.Leave);
+
+            dispatcher.dispatch(
+                {
+                    action: "MatrixActions.Room.myMembership",
+                    oldMembership: KnownMembership.Knock,
+                    membership: KnownMembership.Leave,
+                    room,
+                },
+                true,
+            );
+
+            expect(store.getSortedRooms()).not.toContain(room);
+        });
+
+        it("Previewed room is removed when another room is viewed", async () => {
+            const { store, dispatcher, previewRoom } = await getStoreWithListedPreviewRoom();
+
+            dispatcher.dispatch(
+                { action: Action.ActiveRoomChanged, oldRoomId: previewRoom.roomId, newRoomId: "!other:matrix.org" },
+                true,
+            );
+
+            expect(store.getSortedRooms()).not.toContain(previewRoom);
+        });
+
+        it.each([true, false])("Denied knock stays listed with feature_ask_to_join %s", async (askToJoin) => {
+            const { store, rooms, client, dispatcher } = await getRoomListStore();
+            vi.spyOn(SettingsStore, "getValue").mockImplementation((setting) =>
+                setting === "feature_ask_to_join" ? askToJoin : false,
+            );
+
+            // The room the user was knocking on, whose knock has just been refused.
+            const room = rooms[37];
+            const member = {
+                ...room.getMember(client.getSafeUserId())!,
+                isKicked: () => true,
+                events: { member: { getPrevContent: () => ({ membership: KnownMembership.Knock }) } },
+            };
+            vi.mocked(room.getMember).mockReturnValue(member as unknown as RoomMember);
+
+            dispatcher.dispatch(
+                {
+                    action: "MatrixActions.Room.myMembership",
+                    oldMembership: KnownMembership.Knock,
+                    membership: KnownMembership.Leave,
+                    room,
+                },
+                true,
+            );
+
+            expect(store.getSortedRooms()).toContain(room);
         });
     });
 });

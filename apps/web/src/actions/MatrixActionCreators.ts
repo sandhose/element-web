@@ -125,6 +125,25 @@ function createRoomAction(matrixClient: MatrixClient, room: Room): ActionPayload
 }
 
 /**
+ * @typedef DeleteRoomAction
+ * @type {Object}
+ * @property {string} action 'MatrixActions.DeleteRoom'.
+ * @property {string} roomId the id of the Room that was removed.
+ */
+
+/**
+ * Create a MatrixActions.DeleteRoom action that represents a MatrixClient `DeleteRoom`
+ * matrix event, emitted when a Room is removed from the client.
+ *
+ * @param {MatrixClient} matrixClient the matrix client.
+ * @param {string} roomId the id of the Room that was removed.
+ * @returns {DeleteRoomAction} an action of type `MatrixActions.DeleteRoom`.
+ */
+function createDeleteRoomAction(matrixClient: MatrixClient, roomId: string): ActionPayload {
+    return { action: "MatrixActions.DeleteRoom", roomId };
+}
+
+/**
  * @typedef RoomTagsAction
  * @type {Object}
  * @property {string} action 'MatrixActions.Room.tags'.
@@ -353,6 +372,7 @@ export default {
         addMatrixClientListener(matrixClient, ClientEvent.AccountData, createAccountDataAction);
         addMatrixClientListener(matrixClient, RoomEvent.AccountData, createRoomAccountDataAction);
         addMatrixClientListener(matrixClient, ClientEvent.Room, createRoomAction);
+        addMatrixClientListener(matrixClient, ClientEvent.DeleteRoom, createDeleteRoomAction);
         addMatrixClientListener(matrixClient, RoomEvent.Tags, createRoomTagsAction);
         addMatrixClientListener(matrixClient, RoomEvent.Receipt, createRoomReceiptAction);
         addMatrixClientListener(matrixClient, RoomEvent.Timeline, createRoomTimelineAction);

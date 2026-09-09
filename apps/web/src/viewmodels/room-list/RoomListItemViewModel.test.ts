@@ -36,6 +36,7 @@ import { RoomListItemViewModel } from "./RoomListItemViewModel";
 import RoomListStoreV3 from "../../stores/room-list-v3/RoomListStoreV3";
 import * as tagRoomModule from "../../utils/room/tagRoom";
 import * as membership from "../../utils/membership";
+import { SDKContextClass } from "../../contexts/SDKContextClass";
 import { CHATS_TAG } from "../../stores/room-list-v3/section";
 
 vi.mock("./utils", () => ({
@@ -93,7 +94,18 @@ describe("RoomListItemViewModel", () => {
         vi.spyOn(MessagePreviewStore.instance, "getPreviewForRoom").mockResolvedValue(null);
         vi.spyOn(CallStore.instance, "getCall").mockReturnValue(null);
         vi.spyOn(RoomListStoreV3.instance, "orderedSectionTags", "get").mockReturnValue([]);
+        mockOnScreen();
     });
+
+    /** Stand in for the stores which say why a room with no membership is on screen. */
+    function mockOnScreen(opts: { viewedRoomId?: string; previewRoomId?: string } = {}): void {
+        vi.spyOn(SDKContextClass.instance, "roomViewStore", "get").mockReturnValue({
+            getRoomId: () => opts.viewedRoomId ?? null,
+        } as unknown as SDKContextClass["roomViewStore"]);
+        vi.spyOn(SDKContextClass.instance, "roomPreviewStore", "get").mockReturnValue({
+            isPreviewRoom: (roomId: string) => roomId === opts.previewRoomId,
+        } as unknown as SDKContextClass["roomPreviewStore"]);
+    }
 
     afterEach(() => {
         viewModel?.dispose();
@@ -734,6 +746,42 @@ describe("RoomListItemViewModel", () => {
             viewModel = new RoomListItemViewModel({ room, client: matrixClient });
 
             expect(viewModel.getSnapshot().previewState).toBe("denied");
+        });
+
+        it("should be preview for a room hydrated from a summary", () => {
+            vi.spyOn(room, "getMyMembership").mockReturnValue(KnownMembership.Leave);
+            mockOnScreen({ previewRoomId: room.roomId });
+            viewModel = new RoomListItemViewModel({ room, client: matrixClient });
+
+            expect(viewModel.getSnapshot().previewState).toBe("preview");
+        });
+
+        it("should be preview for the room being viewed once its knock is withdrawn", () => {
+            vi.spyOn(room, "getMyMembership").mockReturnValue(KnownMembership.Knock);
+            mockOnScreen({ viewedRoomId: room.roomId });
+            viewModel = new RoomListItemViewModel({ room, client: matrixClient });
+            expect(viewModel.getSnapshot().previewState).toBe("pending");
+
+            vi.spyOn(room, "getMyMembership").mockReturnValue(KnownMembership.Leave);
+            room.emit(RoomEvent.MyMembership, room, KnownMembership.Leave, KnownMembership.Knock);
+
+            expect(viewModel.getSnapshot().previewState).toBe("preview");
+        });
+
+        it("should be undefined for a left room which is not on screen", () => {
+            vi.spyOn(room, "getMyMembership").mockReturnValue(KnownMembership.Leave);
+            mockOnScreen({ viewedRoomId: "!other:server" });
+            viewModel = new RoomListItemViewModel({ room, client: matrixClient });
+
+            expect(viewModel.getSnapshot().previewState).toBeUndefined();
+        });
+
+        it("should suppress the options menu for a previewed room", () => {
+            vi.spyOn(room, "getMyMembership").mockReturnValue(KnownMembership.Leave);
+            mockOnScreen({ previewRoomId: room.roomId });
+            viewModel = new RoomListItemViewModel({ room, client: matrixClient });
+
+            expect(viewModel.getSnapshot().showMoreOptionsMenu).toBe(false);
         });
 
         it("should relabel the row when the knock is answered", () => {

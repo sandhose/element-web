@@ -48,12 +48,18 @@ export const getLastTimestamp = (r: Room, userId: string): number => {
         // are we'll at least have our own membership event to go off of.
         const effectiveMembership = getEffectiveMembership(r.getMyMembership());
         if (effectiveMembership !== EffectiveMembership.Join) {
-            const membershipEvent = r
-                .getLiveTimeline()
-                .getState(EventTimeline.FORWARDS)
-                ?.getStateEvents(EventType.RoomMember, userId);
+            const state = r.getLiveTimeline().getState(EventTimeline.FORWARDS);
+            const membershipEvent = state?.getStateEvents(EventType.RoomMember, userId);
             if (membershipEvent && !Array.isArray(membershipEvent)) {
                 return membershipEvent.getTs();
+            }
+
+            // A room hydrated from a summary has neither an own member event nor a timeline, so its
+            // create event is the only thing left to date it by.
+            if (timeline.length === 0) {
+                const createEvent = state?.getStateEvents(EventType.RoomCreate, "");
+                const createTs = createEvent && !Array.isArray(createEvent) ? createEvent.getTs() : undefined;
+                if (createTs) return createTs;
             }
         }
 

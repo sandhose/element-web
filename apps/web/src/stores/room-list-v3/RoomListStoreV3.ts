@@ -7,6 +7,7 @@ Please see LICENSE files in the repository root for full details.
 
 import { logger } from "matrix-js-sdk/src/logger";
 import { EventType } from "matrix-js-sdk/src/matrix";
+import { KnownMembership } from "matrix-js-sdk/src/types";
 
 import type { EmptyObject, Room } from "matrix-js-sdk/src/matrix";
 import type { MatrixDispatcher } from "../../dispatcher/dispatcher";
@@ -41,6 +42,17 @@ import { filterBoolean } from "../../utils/arrays";
 import { CHATS_TAG, createSection, deleteSection, editSection, getOrderedSectionTags, reorderSection } from "./section";
 import { DefaultTagID, type TagID } from "./skip-list/tag";
 import { SDKContextClass } from "../../contexts/SDKContextClass.ts";
+
+/**
+ * Whether a room the user has no membership in is on screen, which is the only reason such a room
+ * is listed: the preview store hydrated it from a summary, or it is the room being viewed.
+ */
+export function isRoomOnScreen(roomId: string): boolean {
+    return (
+        SDKContextClass.instance.roomPreviewStore.isPreviewRoom(roomId) ||
+        SDKContextClass.instance.roomViewStore.getRoomId() === roomId
+    );
+}
 
 export enum RoomListStoreV3Event {
     // The event/channel which is called when the room lists have been changed.
@@ -88,6 +100,11 @@ export class RoomListStoreV3Class extends AsyncStoreWithClient<EmptyObject> {
      * Contains all the rooms in the active space
      */
     private roomSkipList?: RoomSkipList;
+
+    /**
+     * The room listed only because it is being previewed without a membership.
+     */
+    private previewedRoomId?: string;
 
     /**
      * These are the filters passed to the room skip list.
@@ -255,6 +272,7 @@ export class RoomListStoreV3Class extends AsyncStoreWithClient<EmptyObject> {
 
     protected async onNotReady(): Promise<void> {
         this.roomSkipList = undefined;
+        this.previewedRoomId = undefined;
     }
 
     protected async onAction(payload: ActionPayload): Promise<void> {
@@ -343,6 +361,13 @@ export class RoomListStoreV3Class extends AsyncStoreWithClient<EmptyObject> {
                     (oldMembership === EffectiveMembership.Invite || oldMembership === EffectiveMembership.Join) &&
                     newMembership === EffectiveMembership.Leave
                 ) {
+                    // A room on screen keeps its row whatever the membership, so withdrawing a
+                    // knock relabels it rather than removing it.
+                    if (payload.oldMembership === KnownMembership.Knock && isRoomOnScreen(payload.room.roomId)) {
+                        this.previewedRoomId = payload.room.roomId;
+                        this.addRoomAndEmit(payload.room);
+                        return;
+                    }
                     this.roomSkipList.removeRoom(payload.room);
                     this.scheduleEmit();
                     return;
@@ -363,7 +388,42 @@ export class RoomListStoreV3Class extends AsyncStoreWithClient<EmptyObject> {
                     }
                 }
 
-                this.addRoomAndEmit(payload.room, oldMembership === EffectiveMembership.Leave);
+                // A previewed room is listed already, despite its leave membership.
+                const wasPreviewed = payload.room.roomId === this.previewedRoomId;
+                if (wasPreviewed) this.previewedRoomId = undefined;
+                this.addRoomAndEmit(payload.room, !wasPreviewed && oldMembership === EffectiveMembership.Leave);
+                break;
+            }
+
+            case "MatrixActions.Room": {
+                // A room the client learns about without a membership is one being previewed.
+                // Without a row for it, nothing can mark the room on screen as the active one.
+                const room: Room = payload.room;
+                if (room.getMyMembership() !== KnownMembership.Leave) break;
+                if (!isRoomOnScreen(room.roomId)) break;
+                this.previewedRoomId = room.roomId;
+                this.addRoomAndEmit(room, true);
+                break;
+            }
+
+            case Action.ActiveRoomChanged: {
+                // For a room the preview store hydrated, this is also the action which releases
+                // it, so the DeleteRoom case below finds nothing left to remove.
+                const { oldRoomId } = payload;
+                if (!oldRoomId || oldRoomId !== this.previewedRoomId) break;
+                this.previewedRoomId = undefined;
+                this.roomSkipList.removeRoom(oldRoomId);
+                this.scheduleEmit();
+                break;
+            }
+
+            case "MatrixActions.DeleteRoom": {
+                // The preview room leaving the client store covers what ActiveRoomChanged does
+                // not: forgetting the room, and logging out.
+                if (payload.roomId !== this.previewedRoomId) break;
+                this.previewedRoomId = undefined;
+                this.roomSkipList.removeRoom(payload.roomId);
+                this.scheduleEmit();
                 break;
             }
 

@@ -8,7 +8,7 @@ Please see LICENSE files in the repository root for full details.
 // @vitest-environment happy-dom
 
 import { describe, it, expect, vi } from "vitest";
-import { Room, type RoomState } from "matrix-js-sdk/src/matrix";
+import { EventType, Room, type RoomState } from "matrix-js-sdk/src/matrix";
 import { KnownMembership } from "matrix-js-sdk/src/types";
 import { mkEvent, mkMessage, mkRoom, stubClient } from "test-utils";
 
@@ -64,6 +64,27 @@ describe("getLastTimestamp", () => {
         });
         vi.spyOn(room, "getMyMembership").mockReturnValue(KnownMembership.Invite);
         expect(getLastTimestamp(room, "@john:matrix.org")).toBe(500);
+    });
+
+    it("should return timestamp of the create event when the room has no member event and no timeline", () => {
+        const cli = stubClient();
+        const room = mkRoom(cli, "!preview:example.org");
+        vi.spyOn(room.getLiveTimeline(), "getState").mockImplementation((_) => {
+            return {
+                getStateEvents: (type: string) =>
+                    type === EventType.RoomCreate
+                        ? mkEvent({
+                              type: EventType.RoomCreate,
+                              user: "@john:matrix.org",
+                              content: {},
+                              ts: 800,
+                              event: true,
+                          })
+                        : null,
+            } as unknown as RoomState;
+        });
+        vi.spyOn(room, "getMyMembership").mockReturnValue(KnownMembership.Leave);
+        expect(getLastTimestamp(room, "@john:matrix.org")).toBe(800);
     });
 
     it("should return bump stamp when using sliding sync", () => {

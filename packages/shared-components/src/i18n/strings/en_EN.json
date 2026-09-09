@@ -219,7 +219,8 @@
         "open_space_menu": "Open space menu",
         "preview_state": {
             "denied": "Declined",
-            "pending": "Pending"
+            "pending": "Pending",
+            "preview": "Preview"
         },
         "primary_filters": "Room list filters",
         "room": {

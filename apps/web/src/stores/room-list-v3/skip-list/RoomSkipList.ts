@@ -90,10 +90,12 @@ export class RoomSkipList implements Iterable<Room> {
 
     /**
      * Removes a given room from the skip list.
+     * Takes an id as well as a room so that a room already gone from the client store can be removed.
      */
-    public removeRoom(room: Room): void {
-        const existingNode = this.roomNodeMap.get(room.roomId);
-        this.roomNodeMap.delete(room.roomId);
+    public removeRoom(roomOrId: Room | string): void {
+        const roomId = typeof roomOrId === "string" ? roomOrId : roomOrId.roomId;
+        const existingNode = this.roomNodeMap.get(roomId);
+        this.roomNodeMap.delete(roomId);
         if (existingNode) {
             for (const level of this.levels) {
                 level.removeNode(existingNode);

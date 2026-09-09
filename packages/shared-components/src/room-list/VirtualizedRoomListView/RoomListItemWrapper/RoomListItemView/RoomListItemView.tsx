@@ -59,10 +59,11 @@ export interface Section {
 }
 
 /**
- * Where the user's request to join a room has got to: awaiting an answer (`pending`) or refused
- * (`denied`).
+ * Why a room is listed without the user having joined it: a request to join awaiting an answer
+ * (`pending`), a request that was refused (`denied`), or a room shown only because the user is
+ * looking at a preview of it (`preview`).
  */
-export type RoomPreviewState = "pending" | "denied";
+export type RoomPreviewState = "pending" | "denied" | "preview";
 
 /**
  * Snapshot for a room list item.
@@ -112,7 +113,7 @@ export interface RoomListItemViewSnapshot {
      * that assign a section (Favourited, Low priority and "Move to").
      */
     canChangeSection: boolean;
-    /** Where the user's request to join this room has got to, if they made one. */
+    /** Why this row is listed without a joined membership, if that is the case. */
     previewState?: RoomPreviewState;
 }
 
