@@ -44,7 +44,7 @@
         "@types/react-dom": "catalog:",
         "@types/semver": "^7.5.8",
         "@typescript/native": "catalog:",
-        "matrix-widget-api": "^1.17.0",
+        "matrix-widget-api": "^1.19.0",
         "rollup-plugin-external-globals": "^0.13.0",
         "semver": "^7.6.3",
         "shared-types": "workspace:*",
