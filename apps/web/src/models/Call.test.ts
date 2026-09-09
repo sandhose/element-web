@@ -9,7 +9,15 @@ Please see LICENSE files in the repository root for full details.
 // @vitest-environment happy-dom
 
 import EventEmitter from "node:events";
-import { RoomType, type Room, RoomEvent, MatrixEvent, type IMyDevice, type RoomMember } from "matrix-js-sdk/src/matrix";
+import {
+    RoomType,
+    type Room,
+    RoomEvent,
+    MatrixError,
+    MatrixEvent,
+    type IMyDevice,
+    type RoomMember,
+} from "matrix-js-sdk/src/matrix";
 import { KnownMembership } from "matrix-js-sdk/src/types";
 import { Widget } from "matrix-widget-api";
 import {
@@ -811,6 +819,90 @@ describe("ElementCall", () => {
 
             const urlParams = new URLSearchParams(new URL(call.widget.url).hash.slice(1));
             expect(urlParams.get("intent")).toBe(ElementCallIntent.JoinExisting);
+        });
+    });
+
+    describe("membership actions", () => {
+        let call: ElementCall;
+        let widget: Widget;
+        let widgetApi: Mocked<ClientWidgetApi>;
+
+        beforeEach(async () => {
+            ElementCall.create(room);
+            call = ElementCall.get(room)!;
+            ({ widget, widgetApi } = setUpWidget(call));
+            await call.start({});
+            call.viaServers = ["example.org"];
+        });
+
+        afterEach(() => cleanUpCallAndWidget(call, widget));
+
+        /** Send a fromWidget request and answer with whatever the host replied. */
+        const ask = async (action: ElementWidgetActions, data: object = {}): Promise<any> => {
+            widgetApi.emit(
+                `action:${action}`,
+                new CustomEvent("widgetapirequest", {
+                    detail: { api: "fromWidget", widgetId: widget.id, requestId: "1", action, data },
+                }),
+            );
+            await vi.waitFor(() => expect(widgetApi.transport.reply).toHaveBeenCalled());
+            return vi.mocked(widgetApi.transport.reply).mock.calls.at(-1)![1];
+        };
+
+        it("joins a room the user is not in and answers with the membership it ends up with", async () => {
+            vi.spyOn(room, "getMyMembership").mockReturnValue(KnownMembership.Leave);
+            client.joinRoom.mockResolvedValue(room);
+
+            expect(await ask(ElementWidgetActions.Membership, { action: "join" })).toEqual({
+                membership: KnownMembership.Join,
+            });
+            expect(client.joinRoom).toHaveBeenCalledWith(room.roomId, { viaServers: ["example.org"] });
+        });
+
+        it("does not join a room the user is already in", async () => {
+            expect(await ask(ElementWidgetActions.Membership, { action: "join" })).toEqual({
+                membership: KnownMembership.Join,
+            });
+            expect(client.joinRoom).not.toHaveBeenCalled();
+        });
+
+        it("knocks with the reason the widget gives", async () => {
+            // The knock has not reached room state by the time the request resolves.
+            vi.spyOn(room, "getMyMembership").mockReturnValue(KnownMembership.Leave);
+            client.knockRoom.mockResolvedValue({ room_id: room.roomId });
+
+            expect(await ask(ElementWidgetActions.Membership, { action: "knock", reason: "let me in" })).toEqual({
+                membership: KnownMembership.Knock,
+            });
+            expect(client.knockRoom).toHaveBeenCalledWith(room.roomId, {
+                viaServers: ["example.org"],
+                reason: "let me in",
+            });
+        });
+
+        it("withdraws a knock by leaving", async () => {
+            vi.spyOn(room, "getMyMembership").mockReturnValue(KnownMembership.Knock);
+            client.leave.mockResolvedValue({});
+
+            expect(await ask(ElementWidgetActions.Membership, { action: "cancel_knock" })).toEqual({
+                membership: KnownMembership.Leave,
+            });
+            expect(client.leave).toHaveBeenCalledWith(room.roomId);
+        });
+
+        it("passes a refusal by the server on in the shape the widget can read", async () => {
+            vi.spyOn(room, "getMyMembership").mockReturnValue(KnownMembership.Leave);
+            client.knockRoom.mockRejectedValue(new MatrixError({ errcode: "M_FORBIDDEN", error: "no" }, 403));
+
+            const reply = await ask(ElementWidgetActions.Membership, { action: "knock" });
+            expect(reply.error.matrix_api_error.response.errcode).toEqual("M_FORBIDDEN");
+            expect(reply.error.matrix_api_error.http_status).toEqual(403);
+        });
+
+        it("reports an action it does not know", async () => {
+            const reply = await ask(ElementWidgetActions.Membership, { action: "explode" });
+            expect(reply.error.message).toContain("explode");
+            expect(reply.error.matrix_api_error).toBeUndefined();
         });
     });
 

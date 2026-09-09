@@ -872,6 +872,17 @@ export class ElementWidgetDriver extends WidgetDriver {
      * or undefined if it is not a {@link MatrixError}.
      */
     public processError(error: unknown): IWidgetApiErrorResponseDataDetails | undefined {
-        return error instanceof MatrixError ? { matrix_api_error: error.asWidgetApiErrorData() } : undefined;
+        return widgetApiErrorDetails(error);
     }
+}
+
+/**
+ * Expresses a {@link MatrixError} as the details of a widget API error response. A widget can only
+ * tell a refusal by the server from an action the host does not implement by this being present,
+ * so every reply to a server error has to carry it.
+ * @param error The error to handle.
+ * @returns The error expressed as a JSON payload, or undefined if it is not a {@link MatrixError}.
+ */
+export function widgetApiErrorDetails(error: unknown): IWidgetApiErrorResponseDataDetails | undefined {
+    return error instanceof MatrixError ? { matrix_api_error: error.asWidgetApiErrorData() } : undefined;
 }

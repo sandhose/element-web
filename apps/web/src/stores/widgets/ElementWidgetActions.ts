@@ -20,6 +20,12 @@ export enum ElementWidgetActions {
     TileLayout = "io.element.tile_layout",
     SpotlightLayout = "io.element.spotlight_layout",
 
+    /**
+     * Asks the host to change the user's membership of the room the widget is in, replying with the
+     * membership the room has afterwards, or with a widget API error.
+     */
+    Membership = "io.element.membership",
+
     OpenIntegrationManager = "integration_manager_open",
     /**
      * @deprecated Use MSC2931 instead
@@ -48,6 +54,17 @@ export enum ElementWidgetActions {
 export interface IHangupCallApiRequest extends IWidgetApiRequest {
     data: {
         errorMessage?: string;
+    };
+}
+
+/** The membership operations {@link ElementWidgetActions.Membership} can be asked to perform. */
+type MembershipAction = "join" | "knock" | "cancel_knock";
+
+export interface IMembershipApiRequest extends IWidgetApiRequest {
+    data: {
+        action?: MembershipAction;
+        /** The message shown to whoever decides on a knock. */
+        reason?: string;
     };
 }
 

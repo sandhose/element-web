@@ -450,6 +450,12 @@ export class RoomViewStore extends EventEmitter {
                     viewingCall = false;
                     ActiveWidgetStore.instance.setWidgetPersistence(call.widget.id, room.roomId, true);
                 }
+                // The widget asks the host to join or knock, and a room reached by id needs these to
+                // do it, including on a second view of the same room, which carries none of its own.
+                if (call instanceof ElementCall) {
+                    call.viaServers =
+                        payload.via_servers ?? (payload.room_id === this.state.roomId ? this.state.viaServers : []);
+                }
                 call.presented = true;
                 // Immediately start the call. This will connect to all required widget events
                 // and allow the widget to show the lobby.

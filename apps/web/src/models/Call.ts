@@ -33,7 +33,8 @@ import SettingsStore from "../settings/SettingsStore";
 import { timeout } from "../utils/promise";
 import WidgetUtils from "../utils/WidgetUtils";
 import { WidgetType } from "../widgets/WidgetType";
-import { ElementWidgetActions } from "../stores/widgets/ElementWidgetActions";
+import { ElementWidgetActions, type IMembershipApiRequest } from "../stores/widgets/ElementWidgetActions";
+import { widgetApiErrorDetails } from "../stores/widgets/ElementWidgetDriver";
 import WidgetStore from "../stores/WidgetStore";
 import { WidgetMessagingStore, WidgetMessagingStoreEvent } from "../stores/widgets/WidgetMessagingStore";
 import ActiveWidgetStore, { ActiveWidgetStoreEvent } from "../stores/ActiveWidgetStore";
@@ -650,6 +651,12 @@ export class ElementCall extends Call {
     public widgetGenerationParameters: WidgetGenerationParameters = {};
 
     /**
+     * The servers to reach the room through, for a room the user is not in yet. Set by whatever
+     * views the room, since `CallStore` constructs the call and knows nothing of how it was reached.
+     */
+    public viaServers: string[] = [];
+
+    /**
      * Calculate the correct intent (and associated parameters) for an Element Call room. Paarameters
      * will be applied to the `params` instance.
      *
@@ -913,6 +920,7 @@ export class ElementCall extends Call {
         widgetApi.on(`action:${ElementWidgetActions.HangupCall}`, this.onHangup);
         widgetApi.on(`action:${ElementWidgetActions.Close}`, this.onClose);
         widgetApi.on(`action:${ElementWidgetActions.DeviceMute}`, this.onDeviceMute);
+        widgetApi.on(`action:${ElementWidgetActions.Membership}`, this.onMembership);
         return widgetApi;
     }
 
@@ -939,6 +947,7 @@ export class ElementCall extends Call {
         this.widgetApi!.off(`action:${ElementWidgetActions.HangupCall}`, this.onHangup);
         this.widgetApi!.off(`action:${ElementWidgetActions.Close}`, this.onClose);
         this.widgetApi!.off(`action:${ElementWidgetActions.DeviceMute}`, this.onDeviceMute);
+        this.widgetApi!.off(`action:${ElementWidgetActions.Membership}`, this.onMembership);
         super.close();
     }
 
@@ -988,6 +997,53 @@ export class ElementCall extends Call {
         ev.preventDefault();
         this.widgetApi!.transport.reply(ev.detail, {}); // ack
     };
+
+    private readonly onMembership = (ev: CustomEvent<IMembershipApiRequest>): Promise<void> => {
+        ev.preventDefault();
+        return this.changeMembership(ev.detail);
+    };
+
+    /**
+     * Perform the membership change the widget asks for and answer with the membership the accepted
+     * request implies: the widget does not know the allow list of a restricted room, so it asks and
+     * reads the outcome rather than choosing between joining and knocking itself. The answer cannot
+     * be read back from room state, which the server's response has not reached yet. Every refusal
+     * by the server carries `matrix_api_error`, which is how the widget tells one from an action the
+     * host does not implement.
+     */
+    private async changeMembership(detail: IMembershipApiRequest): Promise<void> {
+        const { action } = detail.data;
+        try {
+            let membership: Membership;
+            switch (action) {
+                case "join":
+                    if (this.room.getMyMembership() !== KnownMembership.Join) {
+                        await this.client.joinRoom(this.roomId, { viaServers: this.viaServers });
+                    }
+                    membership = KnownMembership.Join;
+                    break;
+                case "knock":
+                    await this.client.knockRoom(this.roomId, {
+                        viaServers: this.viaServers,
+                        reason: detail.data.reason,
+                    });
+                    membership = KnownMembership.Knock;
+                    break;
+                case "cancel_knock":
+                    await this.client.leave(this.roomId);
+                    membership = KnownMembership.Leave;
+                    break;
+                default:
+                    throw new Error(`Unknown membership action ${action}`);
+            }
+            this.widgetApi!.transport.reply(detail, { membership });
+        } catch (e) {
+            logger.warn(`Membership action ${action} failed in room ${this.roomId}`, e);
+            this.widgetApi!.transport.reply(detail, {
+                error: { message: e instanceof Error ? e.message : String(e), ...widgetApiErrorDetails(e) },
+            });
+        }
+    }
 
     private readonly onJoin = (ev: CustomEvent<IWidgetApiRequest>): void => {
         ev.preventDefault();
