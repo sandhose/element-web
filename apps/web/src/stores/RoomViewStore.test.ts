@@ -8,7 +8,14 @@ Please see LICENSE files in the repository root for full details.
 
 // @vitest-environment happy-dom
 
-import { KnownMembership, MatrixError, Room, type RoomMember, SyncState } from "matrix-js-sdk/src/matrix";
+import {
+    KnownMembership,
+    MatrixError,
+    Room,
+    type RoomMember,
+    type RoomSummary,
+    SyncState,
+} from "matrix-js-sdk/src/matrix";
 import { sleep } from "matrix-js-sdk/src/utils";
 import {
     RoomViewLifecycle,
@@ -55,6 +62,7 @@ import { type Call, ConnectionState } from "../models/Call.ts";
 import ActiveWidgetStore from "./ActiveWidgetStore";
 import { ModuleApi } from "../modules/Api";
 import { type JoinRoomPayload } from "../dispatcher/payloads/JoinRoomPayload.ts";
+import { RoomPreviewStore } from "./RoomPreviewStore";
 
 vi.mock("../Modal");
 
@@ -141,6 +149,8 @@ describe("RoomViewStore", function () {
         relations: vi.fn(),
         knockRoom: vi.fn(),
         forget: vi.fn(),
+        getRoomSummary: vi.fn(),
+        hydrateRoomFromSummary: vi.fn(),
         leave: vi.fn(),
         setRoomAccountData: vi.fn(),
         getAccountData: vi.fn(),
@@ -187,7 +197,7 @@ describe("RoomViewStore", function () {
     let dis: MatrixDispatcher;
     let stores: TestSDKContext;
 
-    beforeEach(function () {
+    beforeEach(async function () {
         vi.clearAllMocks();
         mockClient.credentials = { userId: userId };
         mockClient.joinRoom.mockResolvedValue(room);
@@ -219,6 +229,8 @@ describe("RoomViewStore", function () {
             writable: true,
             configurable: true,
         });
+        stores._RoomPreviewStore = new RoomPreviewStore(dis);
+        await setupAsyncStoreWithClient(stores._RoomPreviewStore, mockClient);
         roomViewStore = new RoomViewStore(dis, stores);
         stores._RoomViewStore = roomViewStore;
     });
@@ -772,6 +784,117 @@ describe("RoomViewStore", function () {
                 description: error.message,
                 title: "Failed to cancel",
             });
+        });
+    });
+
+    describe("room summary", () => {
+        // A room the user is a member of needs no summary, so preview a room they are not in.
+        const roomId3 = "!room3:example.com";
+        let room3: Room;
+
+        const summaryFor = (id: string, name: string): RoomSummary =>
+            ({
+                room_id: id,
+                name,
+                world_readable: false,
+                guest_can_join: false,
+                num_joined_members: 3,
+            }) as RoomSummary;
+
+        beforeEach(() => {
+            room3 = new Room(roomId3, mockClient, userId);
+            mockClient.getRoom.mockImplementation((id?: string): Room | null => {
+                if (id === room.roomId) return room;
+                if (id === room2.roomId) return room2;
+                if (id === roomId3) return room3;
+                return null;
+            });
+        });
+
+        it("mirrors the preview of the room being viewed", async () => {
+            const summary = summaryFor(roomId2, "A previewable room");
+            let resolveSummary: (summary: RoomSummary) => void;
+            mockClient.getRoomSummary.mockImplementation(
+                () => new Promise<RoomSummary>((resolve) => (resolveSummary = resolve)),
+            );
+
+            dis.dispatch({ action: Action.ViewRoom, room_id: roomId2 });
+            await untilDispatch(Action.ActiveRoomChanged, dis);
+            expect(roomViewStore.getRoomSummary()).toBeNull();
+
+            resolveSummary!(summary);
+            await flushPromises();
+            expect(roomViewStore.getRoomSummary()).toEqual(summary);
+            expect(roomViewStore.getSummaryError()).toBeNull();
+        });
+
+        it("exposes why a room has no summary", async () => {
+            mockClient.getRoomSummary.mockRejectedValue(new MatrixError({ errcode: "M_FORBIDDEN" }, 403));
+
+            dis.dispatch({ action: Action.ViewRoom, room_id: roomId2 });
+            await untilDispatch(Action.ActiveRoomChanged, dis);
+            await flushPromises();
+
+            expect(roomViewStore.getRoomSummary()).toBeNull();
+            expect(roomViewStore.getSummaryError()).toBe("forbidden");
+        });
+
+        it("has no summary for a room the user is joined to", async () => {
+            dis.dispatch({ action: Action.ViewRoom, room_id: roomId });
+            await untilDispatch(Action.ActiveRoomChanged, dis);
+            await flushPromises();
+
+            expect(mockClient.getRoomSummary).not.toHaveBeenCalled();
+            expect(roomViewStore.getRoomSummary()).toBeNull();
+        });
+
+        it("does not expose the summary of a room which is no longer being viewed", async () => {
+            let resolveFirst: (summary: RoomSummary) => void;
+            mockClient.getRoomSummary.mockImplementationOnce(
+                () => new Promise<RoomSummary>((resolve) => (resolveFirst = resolve)),
+            );
+            mockClient.getRoomSummary.mockResolvedValue(summaryFor(roomId3, "The other room"));
+
+            dis.dispatch({ action: Action.ViewRoom, room_id: roomId2 });
+            await untilDispatch(Action.ActiveRoomChanged, dis);
+            dis.dispatch({ action: Action.ViewRoom, room_id: roomId3 });
+            await untilDispatch(Action.ActiveRoomChanged, dis);
+
+            resolveFirst!(summaryFor(roomId2, "A previewable room"));
+            await flushPromises();
+
+            expect(roomViewStore.getRoomId()).toBe(roomId3);
+            expect(roomViewStore.getRoomSummary()?.name).toBe("The other room");
+        });
+
+        it("re-requests the summary with the via servers the room was reached through", async () => {
+            mockClient.getRoomSummary.mockResolvedValue(summaryFor(roomId2, "A previewable room"));
+
+            dis.dispatch({ action: Action.ViewRoom, room_id: roomId2, via_servers: ["server.example"] });
+            await untilDispatch(Action.ActiveRoomChanged, dis);
+            await flushPromises();
+            expect(mockClient.getRoomSummary).toHaveBeenCalledWith(roomId2, ["server.example"]);
+
+            // A second view of the room on screen carries no via servers of its own.
+            stores.roomPreviewStore.release(roomId2);
+            dis.dispatch({ action: Action.ViewRoom, room_id: roomId2 });
+            await flushPromises();
+
+            expect(mockClient.getRoomSummary).toHaveBeenCalledTimes(2);
+            expect(mockClient.getRoomSummary).toHaveBeenLastCalledWith(roomId2, ["server.example"]);
+        });
+
+        it("clears the summary when leaving the room", async () => {
+            mockClient.getRoomSummary.mockResolvedValue(summaryFor(roomId2, "A previewable room"));
+
+            dis.dispatch({ action: Action.ViewRoom, room_id: roomId2 });
+            await untilDispatch(Action.ActiveRoomChanged, dis);
+            await flushPromises();
+            expect(roomViewStore.getRoomSummary()).not.toBeNull();
+
+            dis.dispatch({ action: Action.ViewHomePage });
+            await untilDispatch(Action.ViewHomePage, dis);
+            expect(roomViewStore.getRoomSummary()).toBeNull();
         });
     });
 

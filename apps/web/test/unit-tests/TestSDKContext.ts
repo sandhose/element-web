@@ -13,6 +13,7 @@ import { type PosthogAnalytics } from "../../src/PosthogAnalytics";
 import { type SlidingSyncManager } from "../../src/SlidingSyncManager";
 import { type RoomNotificationStateStore } from "../../src/stores/notifications/RoomNotificationStateStore";
 import type RightPanelStore from "../../src/stores/right-panel/RightPanelStore";
+import { type RoomPreviewStore } from "../../src/stores/RoomPreviewStore";
 import { type RoomViewStore } from "../../src/stores/RoomViewStore";
 import type SpaceStore from "../../src/stores/spaces/SpaceStore";
 import { type WidgetLayoutStore } from "../../src/stores/widgets/WidgetLayoutStore";
@@ -28,6 +29,7 @@ export class TestSDKContext extends SDKContextClass {
     declare public _client?: MatrixClient;
     declare public _RightPanelStore?: RightPanelStore;
     declare public _RoomNotificationStateStore?: RoomNotificationStateStore;
+    declare public _RoomPreviewStore?: RoomPreviewStore;
     declare public _RoomViewStore?: RoomViewStore;
     declare public _WidgetPermissionStore?: WidgetPermissionStore;
     declare public _WidgetLayoutStore?: WidgetLayoutStore;

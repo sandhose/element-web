@@ -17,6 +17,7 @@ import {
     type Room,
     type MatrixEvent,
     type IJoinRoomOpts,
+    type RoomSummary,
 } from "matrix-js-sdk/src/matrix";
 import { KnownMembership } from "matrix-js-sdk/src/types";
 import { logger } from "matrix-js-sdk/src/logger";
@@ -62,6 +63,7 @@ import { ConnectionState, ElementCall } from "../models/Call";
 import { isVideoRoom } from "../utils/video-rooms";
 import { ModuleApi } from "../modules/Api";
 import ActiveWidgetStore from "./ActiveWidgetStore";
+import { type PreviewError, type RoomPreview } from "./RoomPreviewStore";
 
 const NUM_JOIN_RETRY = 5;
 
@@ -127,6 +129,15 @@ interface State {
     askToJoinCancelled: boolean;
 
     viewRoomOpts: ViewRoomOpts;
+
+    /**
+     * The MSC3266 summary of the room being viewed, for a room the user is not in
+     */
+    roomSummary: RoomSummary | null;
+    /**
+     * Why the room being viewed has no summary
+     */
+    summaryError: PreviewError | null;
 }
 
 const INITIAL_STATE: State = {
@@ -150,9 +161,18 @@ const INITIAL_STATE: State = {
     promptAskToJoin: false,
     askToJoinCancelled: false,
     viewRoomOpts: { buttons: [] },
+    roomSummary: null,
+    summaryError: null,
 };
 
 type Listener = (isActive: boolean) => void;
+
+function projectPreview(preview: RoomPreview | null): Partial<State> {
+    return {
+        roomSummary: preview?.summary ?? null,
+        summaryError: preview?.error ?? null,
+    };
+}
 
 /**
  * A class for storing application state for RoomView.
@@ -288,6 +308,7 @@ export class RoomViewStore extends EventEmitter {
                     viaServers: [],
                     wasContextSwitch: false,
                     viewingCall: false,
+                    ...projectPreview(null),
                 });
                 break;
             case Action.ViewRoomError:
@@ -403,6 +424,10 @@ export class RoomViewStore extends EventEmitter {
     public async viewRoom(payload: ViewRoomPayload): Promise<void> {
         if (payload.room_id) {
             const room = MatrixClientPeg.safeGet().getRoom(payload.room_id);
+            // A second view of the room already on screen carries no via servers of its own, and a
+            // room whose server we cannot guess is only reachable through the ones we arrived with.
+            const viaServers =
+                payload.via_servers ?? (payload.room_id === this.state.roomId ? this.state.viaServers : []);
 
             if (payload.metricsTrigger !== null && payload.room_id !== this.state.roomId) {
                 let activeSpace: ViewRoomEvent["activeSpace"];
@@ -452,10 +477,7 @@ export class RoomViewStore extends EventEmitter {
                 }
                 // The widget asks the host to join or knock, and a room reached by id needs these to
                 // do it, including on a second view of the same room, which carries none of its own.
-                if (call instanceof ElementCall) {
-                    call.viaServers =
-                        payload.via_servers ?? (payload.room_id === this.state.roomId ? this.state.viaServers : []);
-                }
+                if (call instanceof ElementCall) call.viaServers = viaServers;
                 call.presented = true;
                 // Immediately start the call. This will connect to all required widget events
                 // and allow the widget to show the lobby.
@@ -493,6 +515,12 @@ export class RoomViewStore extends EventEmitter {
                 return;
             }
 
+            const previewStore = this.stores.roomPreviewStore;
+            const previewRequest = previewStore.request(payload.room_id, {
+                roomAlias: payload.room_alias,
+                viaServers,
+            });
+
             const newState: Partial<State> = {
                 roomId: payload.room_id,
                 roomAlias: payload.room_alias ?? null,
@@ -508,9 +536,10 @@ export class RoomViewStore extends EventEmitter {
                 askToJoinCancelled: false,
                 // Reset replyingToEvent because we don't want cross-room because bad UX
                 replyingToEvent: null,
-                viaServers: payload.via_servers ?? [],
+                viaServers,
                 wasContextSwitch: payload.context_switch ?? false,
                 viewingCall,
+                ...projectPreview(previewStore.get(payload.room_id)),
             };
 
             // Allow being given an event to be replied to when switching rooms but sanity check its for this room
@@ -524,6 +553,10 @@ export class RoomViewStore extends EventEmitter {
 
             this.setState(newState);
             this.autoJoinViewedApprovedKnock();
+
+            void previewRequest.then((settled) => {
+                if (this.state.roomId === payload.room_id) this.setState(projectPreview(settled));
+            });
 
             if (payload.auto_join) {
                 const joinPayload: JoinRoomPayload = {
@@ -610,6 +643,7 @@ export class RoomViewStore extends EventEmitter {
             roomAlias: payload.room_alias,
             roomLoading: false,
             roomLoadError: payload.err,
+            ...projectPreview(null),
         });
     }
 
@@ -845,6 +879,14 @@ export class RoomViewStore extends EventEmitter {
         return this.state.shouldPeek;
     }
 
+    public getRoomSummary(): RoomSummary | null {
+        return this.state.roomSummary;
+    }
+
+    public getSummaryError(): PreviewError | null {
+        return this.state.summaryError;
+    }
+
     public getWasContextSwitch(): boolean {
         return this.state.wasContextSwitch;
     }
@@ -915,7 +957,13 @@ export class RoomViewStore extends EventEmitter {
             return;
         }
 
-        if (this.state.roomId === payload.roomId) this.setState({ askToJoinCancelled: true });
+        // The summary was fetched while the knock stood, so it still reports the membership the
+        // room no longer has.
+        const previewStore = this.stores.roomPreviewStore;
+        previewStore.release(payload.roomId);
+        const settled = await previewStore.request(payload.roomId, { viaServers: this.state.viaServers });
+        if (this.state.roomId !== payload.roomId) return;
+        this.setState({ ...projectPreview(settled), askToJoinCancelled: true });
     }
 
     /**

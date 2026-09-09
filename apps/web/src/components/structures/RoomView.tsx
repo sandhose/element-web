@@ -892,46 +892,7 @@ export class RoomView extends React.Component<IRoomProps, IRoomState> {
         // making it impossible to indicate a newly joined room.
         if (!joining && roomId) {
             if (!room && shouldPeek) {
-                logger.info(`Attempting to peek into room ${roomId}`);
-                this.setState({
-                    peekLoading: true,
-                    isPeeking: true, // this will change to false if peeking fails
-                });
-                this.context.client
-                    ?.peekInRoom(roomId)
-                    .then((room) => {
-                        if (this.unmounted) {
-                            return;
-                        }
-                        this.setState({
-                            room: room,
-                            peekLoading: false,
-                            canAskToJoin: this.askToJoinEnabled && room.getJoinRule() === JoinRule.Knock,
-                        });
-                        this.onRoomLoaded(room);
-                    })
-                    .catch((err) => {
-                        if (this.unmounted) {
-                            return;
-                        }
-
-                        // Stop peeking if anything went wrong
-                        this.setState({
-                            isPeeking: false,
-                        });
-
-                        // This won't necessarily be a MatrixError, but we duck-type
-                        // here and say if it's got an 'errcode' key with the right value,
-                        // it means we can't peek.
-                        if (err.errcode === "M_GUEST_ACCESS_FORBIDDEN" || err.errcode === "M_FORBIDDEN") {
-                            // This is fine: the room just isn't peekable (we assume).
-                            this.setState({
-                                peekLoading: false,
-                            });
-                        } else {
-                            throw err;
-                        }
-                    });
+                void this.peekInRoom(roomId);
             } else if (room) {
                 // Stop peeking because we have joined this room previously
                 this.context.client?.stopPeeking();
@@ -941,6 +902,65 @@ export class RoomView extends React.Component<IRoomProps, IRoomState> {
                 });
             }
         }
+    }
+
+    private async peekInRoom(roomId: string): Promise<void> {
+        this.setState({
+            peekLoading: true,
+            isPeeking: true, // this will change to false if peeking fails
+        });
+
+        // The summary says whether /initialSync can succeed, and describes the room when it cannot.
+        // The store has one in flight from viewing the room, which this joins rather than starting
+        // a second.
+        const preview = await this.context.roomPreviewStore.request(roomId);
+        if (this.unmounted) return;
+        if (
+            preview &&
+            ((preview.summary && !preview.summary.world_readable) ||
+                preview.error === "notFound" ||
+                preview.error === "forbidden")
+        ) {
+            this.setState({ peekLoading: false, isPeeking: false });
+            return;
+        }
+
+        logger.info(`Attempting to peek into room ${roomId}`);
+        await this.context.client
+            ?.peekInRoom(roomId)
+            .then((room) => {
+                if (this.unmounted) {
+                    return;
+                }
+                this.setState({
+                    room: room,
+                    peekLoading: false,
+                    canAskToJoin: this.askToJoinEnabled && room.getJoinRule() === JoinRule.Knock,
+                });
+                this.onRoomLoaded(room);
+            })
+            .catch((err) => {
+                if (this.unmounted) {
+                    return;
+                }
+
+                // Stop peeking if anything went wrong
+                this.setState({
+                    isPeeking: false,
+                });
+
+                // This won't necessarily be a MatrixError, but we duck-type
+                // here and say if it's got an 'errcode' key with the right value,
+                // it means we can't peek.
+                if (err.errcode === "M_GUEST_ACCESS_FORBIDDEN" || err.errcode === "M_FORBIDDEN") {
+                    // This is fine: the room just isn't peekable (we assume).
+                    this.setState({
+                        peekLoading: false,
+                    });
+                } else {
+                    throw err;
+                }
+            });
     }
 
     private shouldShowApps(room: Room): boolean {

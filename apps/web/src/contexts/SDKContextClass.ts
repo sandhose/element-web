@@ -16,6 +16,7 @@ import { SlidingSyncManager } from "../SlidingSyncManager";
 import { MemberListStore } from "../stores/MemberListStore";
 import { RoomNotificationStateStore } from "../stores/notifications/RoomNotificationStateStore";
 import RightPanelStore from "../stores/right-panel/RightPanelStore";
+import { RoomPreviewStore } from "../stores/RoomPreviewStore";
 import { RoomViewStore } from "../stores/RoomViewStore";
 import SpaceStore from "../stores/spaces/SpaceStore";
 import TypingStore from "../stores/TypingStore";
@@ -62,6 +63,7 @@ export class SDKContextClass {
     protected _MemberListStore?: MemberListStore;
     protected _RightPanelStore?: RightPanelStore;
     protected _RoomNotificationStateStore?: RoomNotificationStateStore;
+    protected _RoomPreviewStore?: RoomPreviewStore;
     protected _RoomViewStore?: RoomViewStore;
     protected _WidgetLayoutStore?: WidgetLayoutStore;
     protected _WidgetStore?: WidgetStore;
@@ -114,6 +116,10 @@ export class SDKContextClass {
             this._RoomNotificationStateStore = RoomNotificationStateStore.instance;
         }
         return this._RoomNotificationStateStore;
+    }
+    public get roomPreviewStore(): RoomPreviewStore {
+        this._RoomPreviewStore ??= RoomPreviewStore.instance;
+        return this._RoomPreviewStore;
     }
     public get roomViewStore(): RoomViewStore {
         if (!this._RoomViewStore) {
