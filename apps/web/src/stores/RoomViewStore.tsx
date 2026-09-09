@@ -10,7 +10,14 @@ Please see LICENSE files in the repository root for full details.
 
 import React, { type ReactNode } from "react";
 import * as utils from "matrix-js-sdk/src/utils";
-import { MatrixError, JoinRule, type Room, type MatrixEvent, type IJoinRoomOpts } from "matrix-js-sdk/src/matrix";
+import {
+    MatrixError,
+    JoinRule,
+    SyncState,
+    type Room,
+    type MatrixEvent,
+    type IJoinRoomOpts,
+} from "matrix-js-sdk/src/matrix";
 import { KnownMembership } from "matrix-js-sdk/src/types";
 import { logger } from "matrix-js-sdk/src/logger";
 import { type ViewRoom as ViewRoomEvent } from "@matrix-org/analytics-events/types/typescript/ViewRoom";
@@ -160,6 +167,47 @@ export class RoomViewStore extends EventEmitter {
     ) {
         super();
         this.resetDispatcher(dis);
+    }
+
+    /** The rooms this store has already joined on an approved knock. */
+    private readonly autoJoinedKnocks = new Set<string>();
+
+    /**
+     * Accept the invite an approved knock arrives as, without asking the user again for something
+     * they already asked for. MSC4509 moves this to the server, which leaves this as the path for
+     * servers without it. A join of a room already joined is a no-op, so racing with a join
+     * started elsewhere costs nothing.
+     */
+    private async autoJoinApprovedKnock(room: Room | null | undefined): Promise<void> {
+        if (!room || this.lockedToRoomId) return;
+        if (!SettingsStore.getValue("feature_ask_to_join")) return;
+        if (room.getMyMembership() !== KnownMembership.Invite) return;
+        if (this.autoJoinedKnocks.has(room.roomId)) return;
+
+        const client = MatrixClientPeg.safeGet();
+        const memberEvent = room.getMember(client.getSafeUserId())?.events.member;
+        if (memberEvent?.getPrevContent().membership !== KnownMembership.Knock) return;
+
+        this.autoJoinedKnocks.add(room.roomId);
+        const viaServers = this.state.roomId === room.roomId ? this.state.viaServers : [];
+        try {
+            await client.joinRoom(room.roomId, { viaServers });
+        } catch (err) {
+            // Whatever refused the join may not refuse the next one, so let a later trigger retry.
+            this.autoJoinedKnocks.delete(room.roomId);
+            logger.warn(`Failed to join ${room.roomId} after the knock was approved`, err);
+        }
+    }
+
+    /**
+     * Join the room being viewed if it is an approved knock the client already holds. The
+     * membership transition is missed by a page load, and by anything which views the room
+     * afterwards, so every entry point into a room has to look.
+     */
+    private autoJoinViewedApprovedKnock(): void {
+        const roomId = this.state.roomId;
+        if (!roomId) return;
+        void this.autoJoinApprovedKnock(MatrixClientPeg.get()?.getRoom(roomId));
     }
 
     public addRoomListener(roomId: string, fn: Listener): void {
@@ -333,6 +381,16 @@ export class RoomViewStore extends EventEmitter {
                 this.setViewRoomOpts();
                 break;
             }
+            case "MatrixActions.Room":
+            case "MatrixActions.Room.myMembership": {
+                void this.autoJoinApprovedKnock(payload.room);
+                break;
+            }
+            // The room being viewed only reaches its real membership once the first sync lands.
+            case "MatrixActions.sync": {
+                if (payload.state === SyncState.Prepared) this.autoJoinViewedApprovedKnock();
+                break;
+            }
         }
     }
 
@@ -452,6 +510,7 @@ export class RoomViewStore extends EventEmitter {
             }
 
             this.setState(newState);
+            this.autoJoinViewedApprovedKnock();
 
             if (payload.auto_join) {
                 const joinPayload: JoinRoomPayload = {

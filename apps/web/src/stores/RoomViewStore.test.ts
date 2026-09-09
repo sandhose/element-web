@@ -8,7 +8,7 @@ Please see LICENSE files in the repository root for full details.
 
 // @vitest-environment happy-dom
 
-import { KnownMembership, MatrixError, Room } from "matrix-js-sdk/src/matrix";
+import { KnownMembership, MatrixError, Room, type RoomMember, SyncState } from "matrix-js-sdk/src/matrix";
 import { sleep } from "matrix-js-sdk/src/utils";
 import {
     RoomViewLifecycle,
@@ -736,6 +736,93 @@ describe("RoomViewStore", function () {
                 description: error.message,
                 title: "Failed to cancel",
             });
+        });
+    });
+
+    describe("auto-join on an approved knock", () => {
+        const knockRoomId = "!approved:example.com";
+        let approved: ReturnType<typeof mkRoom>;
+
+        const membershipChanged = async (room: Room) => {
+            dis.dispatch({ action: "MatrixActions.Room.myMembership", room });
+            await untilDispatch("MatrixActions.Room.myMembership", dis);
+            await flushPromises();
+        };
+
+        const previousMembership = (membership: string) =>
+            approved.getMember.mockReturnValue({
+                events: { member: { getPrevContent: () => ({ membership }) } },
+            } as unknown as RoomMember);
+
+        beforeEach(() => {
+            approved = mkRoom(mockClient, knockRoomId);
+            approved.getMyMembership.mockReturnValue(KnownMembership.Invite);
+            previousMembership(KnownMembership.Knock);
+            getRooms.mockReturnValue([room, room2, approved]);
+            mockClient.getRoom.mockImplementation((id?: string): Room | null => {
+                if (id === knockRoomId) return approved;
+                if (id === room.roomId) return room;
+                if (id === room2.roomId) return room2;
+                return null;
+            });
+            vi.spyOn(SettingsStore, "getValue").mockImplementation(
+                (settingName) => settingName === "feature_ask_to_join",
+            );
+        });
+
+        afterEach(() => {
+            getRooms.mockReturnValue([room, room2]);
+            if (vi.isMockFunction(SettingsStore.getValue)) vi.mocked(SettingsStore.getValue).mockRestore();
+        });
+
+        it("joins a room whose invite replaced a knock", async () => {
+            await membershipChanged(approved);
+            expect(mockClient.joinRoom).toHaveBeenCalledWith(knockRoomId, { viaServers: [] });
+        });
+
+        it("joins such a room only once", async () => {
+            await membershipChanged(approved);
+            await membershipChanged(approved);
+            expect(mockClient.joinRoom).toHaveBeenCalledTimes(1);
+        });
+
+        it("leaves a plain invite for the user to accept", async () => {
+            previousMembership(KnownMembership.Leave);
+            await membershipChanged(approved);
+            expect(mockClient.joinRoom).not.toHaveBeenCalled();
+        });
+
+        it("does nothing for a room the user is already in", async () => {
+            approved.getMyMembership.mockReturnValue(KnownMembership.Join);
+            await membershipChanged(approved);
+            expect(mockClient.joinRoom).not.toHaveBeenCalled();
+        });
+
+        it("does nothing while asking to join is disabled", async () => {
+            vi.mocked(SettingsStore.getValue).mockReturnValue(false);
+            await membershipChanged(approved);
+            expect(mockClient.joinRoom).not.toHaveBeenCalled();
+        });
+
+        it("joins a room approved before the view, which sees no transition", async () => {
+            dis.dispatch({ action: Action.ViewRoom, room_id: knockRoomId });
+            await untilDispatch(Action.ActiveRoomChanged, dis);
+            await flushPromises();
+
+            expect(mockClient.joinRoom).toHaveBeenCalledWith(knockRoomId, { viaServers: [] });
+        });
+
+        it("retries on the next trigger when the join is refused", async () => {
+            mockClient.joinRoom.mockRejectedValueOnce(new MatrixError());
+            dis.dispatch({ action: Action.ViewRoom, room_id: knockRoomId });
+            await untilDispatch(Action.ActiveRoomChanged, dis);
+            await flushPromises();
+
+            dis.dispatch({ action: "MatrixActions.sync", state: SyncState.Prepared });
+            await untilDispatch("MatrixActions.sync", dis);
+            await flushPromises();
+
+            expect(mockClient.joinRoom).toHaveBeenCalledTimes(2);
         });
     });
 
