@@ -147,6 +147,10 @@ export class ElementWidgetDriver extends WidgetDriver {
             this.allowedCapabilities.add(
                 WidgetEventCapability.forStateEvent(EventDirection.Receive, EventType.RoomEncryption).raw,
             );
+            // Element Call reads the join rule to decide what a user who is not in the room can do.
+            this.allowedCapabilities.add(
+                WidgetEventCapability.forStateEvent(EventDirection.Receive, EventType.RoomJoinRules).raw,
+            );
             const clientUserId = MatrixClientPeg.safeGet().getSafeUserId();
             // For the legacy membership type
             this.allowedCapabilities.add(
