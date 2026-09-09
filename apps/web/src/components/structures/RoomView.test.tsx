@@ -22,6 +22,7 @@ import {
     RoomEvent,
     RoomMember,
     RoomStateEvent,
+    RoomType,
     SearchResult,
     User,
 } from "matrix-js-sdk/src/matrix";
@@ -874,6 +875,9 @@ describe("RoomView", () => {
             vi.spyOn(defaultDispatcher, "dispatch");
         });
 
+        // `vi.clearAllMocks()` only clears call history, so this implementation would outlive the suite.
+        afterEach(() => vi.mocked(SettingsStore.getValue).mockRestore());
+
         it("allows to request to join", async () => {
             vi.spyOn(MatrixClientPeg, "safeGet").mockReturnValue(client);
             vi.spyOn(client, "knockRoom").mockResolvedValue({ room_id: room.roomId });
@@ -902,6 +906,103 @@ describe("RoomView", () => {
                 action: "cancel_ask_to_join",
                 roomId: room.roomId,
             });
+        });
+    });
+
+    describe("call room previews", () => {
+        let membership: Mock;
+
+        beforeEach(async () => {
+            await setupAsyncStoreWithClient(CallStore.instance, MatrixClientPeg.safeGet());
+            room.isCallRoom = () => true;
+            room.getType = () => RoomType.UnstableCall;
+            vi.spyOn(room, "getJoinRule").mockReturnValue(JoinRule.Knock);
+            vi.spyOn(CallStore.instance, "getConfiguredRTCTransports").mockReturnValue([
+                { type: "livekit" },
+            ] as unknown as ReturnType<CallStore["getConfiguredRTCTransports"]>);
+            await SettingsStore.setValue("feature_video_rooms", null, SettingLevel.DEVICE, true);
+            await SettingsStore.setValue("feature_element_call_video_rooms", null, SettingLevel.DEVICE, true);
+            await SettingsStore.setValue("feature_ask_to_join", null, SettingLevel.DEVICE, true);
+            membership = vi.spyOn(room, "getMyMembership").mockReturnValue(KnownMembership.Leave) as unknown as Mock;
+        });
+
+        /** Move the user's own membership on, the way a knock's approval does. */
+        const setMembership = async (next: string, prev?: string): Promise<void> => {
+            membership.mockReturnValue(next);
+            room.currentState.setStateEvents([
+                mkEvent({
+                    event: true,
+                    type: EventType.RoomMember,
+                    room: room.roomId,
+                    user: cli.getSafeUserId(),
+                    skey: cli.getSafeUserId(),
+                    content: { membership: next },
+                    prev_content: prev ? { membership: prev } : undefined,
+                }),
+            ]);
+            await act(async () => {
+                cli.emit(RoomEvent.MyMembership, room, next as any, prev as any);
+                defaultDispatcher.dispatch({ action: "MatrixActions.Room.myMembership", room, membership: next });
+                await flushPromises();
+            });
+        };
+
+        it("keeps one widget across leave, knock, invite and join", async () => {
+            const { container } = await mountRoomView();
+
+            const widget = container.querySelector(".mx_AppTile");
+            expect(widget).not.toBeNull();
+
+            await setMembership(KnownMembership.Knock, KnownMembership.Leave);
+            expect(container.querySelector(".mx_AppTile")).toBe(widget);
+
+            await setMembership(KnownMembership.Invite, KnownMembership.Knock);
+            expect(container.querySelector(".mx_AppTile")).toBe(widget);
+
+            await setMembership(KnownMembership.Join, KnownMembership.Invite);
+            expect(container.querySelector(".mx_AppTile")).toBe(widget);
+
+            expect(container.querySelector(".mx_RoomPreviewCard")).toBeNull();
+            expect(container.querySelector(".mx_RoomPreviewBar")).toBeNull();
+        });
+
+        it("swaps the lobby for the bar when the knock is refused", async () => {
+            const { container } = await mountRoomView();
+            expect(container.querySelector(".mx_AppTile")).not.toBeNull();
+
+            // The knock the widget sent never reached the client, so the kick leaves the
+            // membership at the leave it already was and only the member event says what happened.
+            const kick = mkEvent({
+                event: true,
+                type: EventType.RoomMember,
+                room: room.roomId,
+                user: "@carol:example.com",
+                skey: cli.getSafeUserId(),
+                content: { membership: KnownMembership.Leave },
+                prev_content: { membership: KnownMembership.Knock },
+            });
+            await act(async () => {
+                room.currentState.setStateEvents([kick]);
+                defaultDispatcher.dispatch({
+                    action: "MatrixActions.RoomState.events",
+                    event: kick,
+                    state: room.currentState,
+                    lastStateEvent: null,
+                });
+                await flushPromises();
+            });
+
+            expect(container.querySelector(".mx_AppTile")).toBeNull();
+            expect(container.querySelector(".mx_RoomPreviewBar")).not.toBeNull();
+        });
+
+        it("falls back to the bar when no RTC transport is configured", async () => {
+            vi.spyOn(CallStore.instance, "getConfiguredRTCTransports").mockReturnValue([]);
+            const { container } = await mountRoomView();
+
+            expect(container.querySelector(".mx_AppTile")).toBeNull();
+            expect(container.querySelector(".mx_RoomPreviewBar")).not.toBeNull();
+            expect(container.querySelector(".mx_RoomPreviewCard")).toBeNull();
         });
     });
 

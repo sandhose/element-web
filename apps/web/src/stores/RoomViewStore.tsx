@@ -397,6 +397,7 @@ export class RoomViewStore extends EventEmitter {
             // for these events blank out the roomId as we are no longer in the RoomView
             case "view_welcome_page":
             case Action.ViewHomePage:
+                this.stopPresentingCall(this.state.roomId);
                 this.recomputePreview({
                     roomId: null,
                     roomAlias: null,
@@ -504,7 +505,18 @@ export class RoomViewStore extends EventEmitter {
                 break;
             }
             // The room the user is viewing may arrive, or change, after the view was dispatched.
-            case "MatrixActions.Room":
+            case "MatrixActions.Room": {
+                const room: Room | undefined = payload.room;
+                void this.autoJoinApprovedKnock(room);
+                if (room?.roomId !== this.state.roomId) break;
+                this.recomputePreview();
+                // Nothing could decide to show this room's call when it was viewed, because the
+                // client did not hold the room then.
+                if (isVideoRoom(room)) {
+                    this.setState({ viewingCall: this.syncCallView(room.roomId, { viewCall: true }) });
+                }
+                break;
+            }
             case "MatrixActions.Room.myMembership": {
                 void this.autoJoinApprovedKnock(payload.room);
                 if (payload.room?.roomId === this.state.roomId) this.recomputePreview();
@@ -535,6 +547,80 @@ export class RoomViewStore extends EventEmitter {
                 break;
             }
         }
+    }
+
+    /**
+     * Create, present and start the call of a room which should have one on screen, and answer
+     * whether the view is showing it. Called again when the room itself arrives, which is how a
+     * room the client did not hold at `ViewRoom` time still gets its call.
+     */
+    private syncCallView(
+        roomId: string,
+        opts: { viewCall?: boolean; skipLobby?: boolean; voiceOnly?: boolean; viaServers?: string[] },
+    ): boolean {
+        const room = MatrixClientPeg.safeGet().getRoom(roomId);
+
+        let viewingCall = opts.viewCall;
+        if (viewingCall === undefined) {
+            // Default behavior: keep the same call state as before if viewing the same room
+            if (roomId === this.state.roomId) viewingCall = this.state.viewingCall;
+            // Always view the call in video rooms
+            else if (room && isVideoRoom(room)) viewingCall = true;
+            // Otherwise, only view if actively connected
+            else viewingCall = CallStore.instance.getActiveCall(roomId) !== null;
+        }
+
+        // The room being viewed may not be the one the state describes yet.
+        const previewMode =
+            roomId === this.state.roomId
+                ? this.state.previewMode
+                : previewFields({
+                      ...this.state,
+                      roomId,
+                      ...projectPreview(this.stores.roomPreviewStore.get(roomId)),
+                  }).previewMode;
+        // The same predicate stands behind `RoomView.render`, so the call is mounted exactly when
+        // the room body which holds it is on screen.
+        if (room && viewingCall && (previewMode === PreviewMode.Lobby || previewMode === PreviewMode.Full)) {
+            let call = CallStore.instance.getCall(roomId);
+            // Start a call if not already there
+            if (call === null) {
+                ElementCall.create(room);
+                call = CallStore.instance.getCall(roomId)!;
+            }
+
+            // Custom case where we start voice calls in pip
+            if (opts.voiceOnly ?? false) {
+                viewingCall = false;
+                ActiveWidgetStore.instance.setWidgetPersistence(call.widget.id, room.roomId, true);
+            }
+            // The widget asks the host to join or knock, and a room reached by id needs these to do
+            // it, including on a second view of the same room, which carries none of its own.
+            if (call instanceof ElementCall) {
+                call.viaServers = opts.viaServers ?? (roomId === this.state.roomId ? this.state.viaServers : []);
+            }
+            call.presented = true;
+            // Immediately start the call. This will connect to all required widget events
+            // and allow the widget to show the lobby.
+            if (call.connectionState === ConnectionState.Disconnected) {
+                void call.start({ skipLobby: opts.skipLobby, voiceOnly: opts.voiceOnly });
+            }
+        }
+
+        return viewingCall;
+    }
+
+    /**
+     * Stop presenting a room's call, destroying it outright where the room is only a preview: that
+     * `Room` is about to leave the client store, and a `Call` which outlives it holds a virtual
+     * widget nothing can reach again.
+     */
+    private stopPresentingCall(roomId: string | null): void {
+        if (!roomId) return;
+        const call = CallStore.instance.getCall(roomId);
+        if (call === null) return;
+        call.presented = false;
+        if (this.stores.roomPreviewStore.isPreviewRoom(roomId)) call.destroy();
     }
 
     public async viewRoom(payload: ViewRoomPayload): Promise<void> {
@@ -569,43 +655,16 @@ export class RoomViewStore extends EventEmitter {
                 });
             }
 
-            let viewingCall = payload.view_call;
-            if (viewingCall === undefined) {
-                // Default behavior: keep the same call state as before if viewing the same room
-                if (payload.room_id === this.state.roomId) viewingCall = this.state.viewingCall;
-                // Always view the call in video rooms
-                else if (room && isVideoRoom(room)) viewingCall = true;
-                // Otherwise, only view if actively connected
-                else viewingCall = CallStore.instance.getActiveCall(payload.room_id) !== null;
-            }
-
-            if (room && viewingCall) {
-                let call = CallStore.instance.getCall(payload.room_id);
-                // Start a call if not already there
-                if (call === null) {
-                    ElementCall.create(room);
-                    call = CallStore.instance.getCall(payload.room_id)!;
-                }
-
-                // Custom case where we start voice calls in pip
-                if (payload.voiceOnly ?? false) {
-                    viewingCall = false;
-                    ActiveWidgetStore.instance.setWidgetPersistence(call.widget.id, room.roomId, true);
-                }
-                // The widget asks the host to join or knock, and a room reached by id needs these to
-                // do it, including on a second view of the same room, which carries none of its own.
-                if (call instanceof ElementCall) call.viaServers = viaServers;
-                call.presented = true;
-                // Immediately start the call. This will connect to all required widget events
-                // and allow the widget to show the lobby.
-                if (call.connectionState === ConnectionState.Disconnected) {
-                    void call.start({ skipLobby: payload.skipLobby, voiceOnly: payload.voiceOnly });
-                }
-            }
+            const viewingCall = this.syncCallView(payload.room_id, {
+                viewCall: payload.view_call,
+                skipLobby: payload.skipLobby,
+                voiceOnly: payload.voiceOnly,
+                viaServers,
+            });
             // If we switch to a different room from the call, we are no longer presenting it
-            const prevRoomCall = this.state.roomId ? CallStore.instance.getCall(this.state.roomId) : null;
-            if (prevRoomCall !== null && (!payload.view_call || payload.room_id !== this.state.roomId))
-                prevRoomCall.presented = false;
+            if (!payload.view_call || payload.room_id !== this.state.roomId) {
+                this.stopPresentingCall(this.state.roomId);
+            }
 
             if (SettingsStore.getValue("feature_simplified_sliding_sync") && this.state.roomId !== payload.room_id) {
                 this.setState({

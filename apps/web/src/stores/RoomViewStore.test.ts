@@ -15,6 +15,7 @@ import {
     MatrixError,
     Room,
     type RoomMember,
+    RoomType,
     type RoomSummary,
     SyncState,
 } from "matrix-js-sdk/src/matrix";
@@ -61,7 +62,7 @@ import { CallStore } from "./CallStore";
 import { MatrixClientPeg } from "../MatrixClientPeg";
 import MediaDeviceHandler, { MediaDeviceKindEnum } from "../MediaDeviceHandler";
 import { storeRoomAliasInCache } from "../RoomAliasCache.ts";
-import { type Call, ConnectionState } from "../models/Call.ts";
+import { type Call, ConnectionState, ElementCall } from "../models/Call.ts";
 import ActiveWidgetStore from "./ActiveWidgetStore";
 import { ModuleApi } from "../modules/Api";
 import { type JoinRoomPayload } from "../dispatcher/payloads/JoinRoomPayload.ts";
@@ -1136,6 +1137,137 @@ describe("RoomViewStore", function () {
     describe("getViewRoomOpts", () => {
         it("returns viewRoomOpts", () => {
             expect(roomViewStore.getViewRoomOpts()).toEqual({ buttons: [] });
+        });
+    });
+
+    describe("call view", () => {
+        const callRoomId = "!callroom:server";
+        let callRoom: ReturnType<typeof mkRoom>;
+        let call: Call;
+        let created: boolean;
+        let arrived: boolean;
+
+        beforeEach(async () => {
+            created = false;
+            arrived = true;
+            // A server which will not describe the room: this suite is about the call, not the summary.
+            mockClient.getRoomSummary.mockRejectedValue(new MatrixError({ errcode: "M_FORBIDDEN" }, 403));
+            callRoom = mkRoom(mockClient, callRoomId);
+            callRoom.isCallRoom.mockReturnValue(true);
+            callRoom.getType.mockReturnValue(RoomType.UnstableCall);
+            callRoom.getMyMembership.mockReturnValue(KnownMembership.Join);
+            mockClient.getRoom.mockImplementation((id?: string): Room | null => {
+                if (id === room.roomId) return room;
+                if (id === room2.roomId) return room2;
+                if (id === callRoomId && arrived) return callRoom;
+                return null;
+            });
+
+            call = {
+                presented: false,
+                connectionState: ConnectionState.Disconnected,
+                widget: { id: "!widget:server" },
+                start: vi.fn(),
+                destroy: vi.fn(),
+            } as unknown as Call;
+            vi.spyOn(ElementCall, "create").mockImplementation(() => {
+                created = true;
+            });
+            vi.spyOn(CallStore.instance, "getCall").mockImplementation((id) =>
+                id === callRoomId && created ? call : null,
+            );
+            vi.spyOn(CallStore.instance, "getActiveCall").mockReturnValue(null);
+            vi.spyOn(CallStore.instance, "getConfiguredRTCTransports").mockReturnValue([
+                { type: "livekit" },
+            ] as unknown as ReturnType<CallStore["getConfiguredRTCTransports"]>);
+            await setupAsyncStoreWithClient(CallStore.instance, MatrixClientPeg.safeGet());
+        });
+
+        afterEach(() => {
+            if (vi.isMockFunction(SettingsStore.getValue)) vi.mocked(SettingsStore.getValue).mockRestore();
+            mockClient.getRoomSummary.mockReset();
+        });
+
+        const enableVideoRooms = () =>
+            vi
+                .spyOn(SettingsStore, "getValue")
+                .mockImplementation((settingName) =>
+                    ["feature_video_rooms", "feature_element_call_video_rooms", "feature_ask_to_join"].includes(
+                        settingName,
+                    ),
+                );
+
+        it("boots the call of a room which only arrives after it was viewed", async () => {
+            arrived = false;
+            dis.dispatch({ action: Action.ViewRoom, room_id: callRoomId });
+            await untilDispatch(Action.ActiveRoomChanged, dis);
+            expect(ElementCall.create).not.toHaveBeenCalled();
+            expect(roomViewStore.isViewingCall()).toBe(false);
+
+            arrived = true;
+            dis.dispatch({ action: "MatrixActions.Room", room: callRoom });
+            await untilEmission(roomViewStore, UPDATE_EVENT);
+
+            expect(roomViewStore.isViewingCall()).toBe(true);
+            expect(CallStore.instance.getCall(callRoomId)).toBe(call);
+            expect(call.presented).toBe(true);
+            expect(call.start).toHaveBeenCalled();
+        });
+
+        it("boots the call of a knockable call room the user is not in", async () => {
+            enableVideoRooms();
+            callRoom.getMyMembership.mockReturnValue(KnownMembership.Leave);
+            callRoom.getJoinRule.mockReturnValue(JoinRule.Knock);
+
+            dis.dispatch({ action: Action.ViewRoom, room_id: callRoomId });
+            await untilDispatch(Action.ActiveRoomChanged, dis);
+
+            expect(roomViewStore.getPreviewMode()).toEqual(PreviewMode.Lobby);
+            expect(ElementCall.create).toHaveBeenCalledWith(callRoom);
+            expect(call.presented).toBe(true);
+        });
+
+        it("boots nothing for a call room the user cannot enter", async () => {
+            enableVideoRooms();
+            callRoom.getMyMembership.mockReturnValue(KnownMembership.Leave);
+            callRoom.getJoinRule.mockReturnValue(JoinRule.Invite);
+
+            dis.dispatch({ action: Action.ViewRoom, room_id: callRoomId });
+            await untilDispatch(Action.ActiveRoomChanged, dis);
+
+            expect(roomViewStore.getPreviewMode()).toEqual(PreviewMode.Bar);
+            expect(ElementCall.create).not.toHaveBeenCalled();
+        });
+
+        it("gives up and destroys the call of a preview room when navigating away", async () => {
+            enableVideoRooms();
+            callRoom.getMyMembership.mockReturnValue(KnownMembership.Leave);
+            callRoom.getJoinRule.mockReturnValue(JoinRule.Knock);
+            vi.spyOn(stores.roomPreviewStore, "isPreviewRoom").mockImplementation((id) => id === callRoomId);
+
+            dis.dispatch({ action: Action.ViewRoom, room_id: callRoomId });
+            await untilDispatch(Action.ActiveRoomChanged, dis);
+            expect(call.presented).toBe(true);
+
+            dis.dispatch({ action: Action.ViewHomePage });
+            await untilEmission(roomViewStore, UPDATE_EVENT);
+
+            expect(call.presented).toBe(false);
+            expect(call.destroy).toHaveBeenCalled();
+        });
+
+        it("keeps the call of a room which stays in the store when navigating away", async () => {
+            vi.spyOn(stores.roomPreviewStore, "isPreviewRoom").mockReturnValue(false);
+
+            dis.dispatch({ action: Action.ViewRoom, room_id: callRoomId });
+            await untilDispatch(Action.ActiveRoomChanged, dis);
+            expect(call.presented).toBe(true);
+
+            dis.dispatch({ action: Action.ViewRoom, room_id: roomId });
+            await untilDispatch(Action.ActiveRoomChanged, dis);
+
+            expect(call.presented).toBe(false);
+            expect(call.destroy).not.toHaveBeenCalled();
         });
     });
 
