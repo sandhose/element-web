@@ -77,6 +77,7 @@ import { TimelineRenderingType } from "../../contexts/RoomContext";
 import { ModuleApi } from "../../modules/Api";
 import MatrixClientBackedController from "../../settings/controllers/MatrixClientBackedController.ts";
 import { type ComposerInsertPayload, ComposerType } from "../../dispatcher/payloads/ComposerInsertPayload.ts";
+import { PreviewMode, type PreviewCta } from "../../utils/room/previewMode.ts";
 
 // Used by group calls
 vi.spyOn(MediaDeviceHandler, "getDevices").mockResolvedValue({
@@ -901,6 +902,78 @@ describe("RoomView", () => {
                 action: "cancel_ask_to_join",
                 roomId: room.roomId,
             });
+        });
+    });
+
+    describe("preview modes", () => {
+        const previewing = (mode: PreviewMode, cta: PreviewCta = { kind: "needInvite", allowedVia: [] }): void => {
+            vi.spyOn(stores.roomViewStore, "getPreviewMode").mockReturnValue(mode);
+            vi.spyOn(stores.roomViewStore, "getPreviewCta").mockReturnValue(cta);
+        };
+
+        beforeEach(() => {
+            vi.spyOn(room, "getMyMembership").mockReturnValue(KnownMembership.Leave);
+        });
+
+        it("shows a spinner and no header while loading", async () => {
+            previewing(PreviewMode.Loading);
+            const { container } = await mountRoomView();
+            expect(container.querySelector(".mx_RoomHeader")).toBeNull();
+            expect(container.querySelector(".mx_Spinner")).not.toBeNull();
+            expect(container.querySelector('[data-testid="timeline"]')).toBeNull();
+        });
+
+        it.each([[PreviewMode.NotFound], [PreviewMode.Forbidden]])(
+            "shows a bar with no header for mode %i",
+            async (mode) => {
+                previewing(mode);
+                const { container } = await mountRoomView();
+                expect(container.querySelector(".mx_RoomHeader")).toBeNull();
+                expect(container.querySelector(".mx_RoomPreviewBar")).not.toBeNull();
+            },
+        );
+
+        it.each([[PreviewMode.Bar], [PreviewMode.Banned]])("shows a bar under a header for mode %i", async (mode) => {
+            previewing(mode);
+            const { container } = await mountRoomView();
+            expect(container.querySelector(".mx_RoomHeader")).not.toBeNull();
+            expect(container.querySelector(".mx_RoomPreviewBar")).not.toBeNull();
+            expect(container.querySelector('[data-testid="timeline"]')).toBeNull();
+        });
+
+        it("shows the member count from the summary in the header", async () => {
+            previewing(PreviewMode.Bar);
+            vi.spyOn(stores.roomViewStore, "getRoomSummary").mockReturnValue({
+                room_id: room.roomId,
+                num_joined_members: 42,
+                world_readable: false,
+                guest_can_join: false,
+            });
+            const { container } = await mountRoomView();
+            expect(container.querySelector(".mx_RoomHeader_members")).toHaveTextContent("42");
+        });
+
+        it("shows the timeline with the bar inside it for a world-readable room", async () => {
+            previewing(PreviewMode.Full);
+            const { container } = await mountRoomView();
+            expect(container.querySelector(".mx_RoomHeader")).not.toBeNull();
+            expect(container.querySelector('[data-testid="timeline"]')).not.toBeNull();
+            expect(container.querySelector(".mx_RoomPreviewBar")).not.toBeNull();
+        });
+
+        it("leaves the bar out of the lobby, where the widget owns the main split", async () => {
+            previewing(PreviewMode.Lobby, { kind: "ask", allowedVia: [] });
+            const { container } = await mountRoomView();
+            expect(container.querySelector(".mx_RoomHeader")).not.toBeNull();
+            expect(container.querySelector(".mx_RoomPreviewBar")).toBeNull();
+        });
+
+        it("keeps the legacy Jitsi card for a video room the user is not in", async () => {
+            room.isElementVideoRoom = () => true;
+            previewing(PreviewMode.Bar);
+            const { container } = await mountRoomView();
+            expect(container.querySelector(".mx_RoomPreviewCard")).not.toBeNull();
+            expect(container.querySelector(".mx_RoomPreviewBar")).toBeNull();
         });
     });
 

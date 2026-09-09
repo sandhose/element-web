@@ -9,6 +9,8 @@ Please see LICENSE files in the repository root for full details.
 // @vitest-environment happy-dom
 
 import {
+    EventType,
+    JoinRule,
     KnownMembership,
     MatrixError,
     Room,
@@ -30,6 +32,7 @@ import {
     mkEvent,
     mkRoom,
     mkRoomMember,
+    mockStateEventImplementation,
     setupAsyncStoreWithClient,
     untilDispatch,
     untilEmission,
@@ -63,6 +66,8 @@ import ActiveWidgetStore from "./ActiveWidgetStore";
 import { ModuleApi } from "../modules/Api";
 import { type JoinRoomPayload } from "../dispatcher/payloads/JoinRoomPayload.ts";
 import { RoomPreviewStore } from "./RoomPreviewStore";
+import { PreviewMode } from "../utils/room/previewMode";
+import { SettingLevel } from "../settings/SettingLevel";
 
 vi.mock("../Modal");
 
@@ -982,6 +987,149 @@ describe("RoomViewStore", function () {
             await flushPromises();
 
             expect(mockClient.joinRoom).toHaveBeenCalledTimes(2);
+        });
+    });
+
+    describe("preview mode", () => {
+        const knockableRoom = () => {
+            room.getMyMembership.mockReturnValue(KnownMembership.Leave);
+            room.getJoinRule.mockReturnValue(JoinRule.Knock);
+        };
+        const askToJoin = (enabled: boolean) =>
+            vi.spyOn(SettingsStore, "getValue").mockImplementation((settingName) => {
+                if (settingName === "feature_ask_to_join") return enabled;
+                return false;
+            });
+
+        afterEach(() => {
+            // The mocks outlive `vi.clearAllMocks()`, which only clears call history, and `room`
+            // is shared by the whole suite.
+            if (vi.isMockFunction(SettingsStore.getValue)) vi.mocked(SettingsStore.getValue).mockRestore();
+            vi.mocked(room.currentState).getStateEvents.mockImplementation(mockStateEventImplementation([]));
+            room.getMember.mockReset();
+        });
+
+        it("waits before any room is viewed", () => {
+            expect(roomViewStore.getPreviewMode()).toEqual(PreviewMode.Loading);
+        });
+
+        it("renders the room itself for a room the user is in", async () => {
+            room.getMyMembership.mockReturnValue(KnownMembership.Join);
+            dis.dispatch({ action: Action.ViewRoom, room_id: roomId });
+            await untilDispatch(Action.ActiveRoomChanged, dis);
+            expect(roomViewStore.getPreviewMode()).toEqual(PreviewMode.Full);
+        });
+
+        it("offers the ask for a knockable room the user is not in", async () => {
+            askToJoin(true);
+            knockableRoom();
+            dis.dispatch({ action: Action.ViewRoom, room_id: roomId });
+            await untilDispatch(Action.ActiveRoomChanged, dis);
+            expect(roomViewStore.getPreviewMode()).toEqual(PreviewMode.Bar);
+            expect(roomViewStore.getPreviewCta()).toEqual({ kind: "ask", allowedVia: [] });
+        });
+
+        it("recomputes when the ask-to-join flag is toggled", async () => {
+            askToJoin(true);
+            knockableRoom();
+            dis.dispatch({ action: Action.ViewRoom, room_id: roomId });
+            await untilDispatch(Action.ActiveRoomChanged, dis);
+
+            askToJoin(false);
+            dis.dispatch({
+                action: Action.SettingUpdated,
+                settingName: "feature_ask_to_join",
+                roomId: null,
+                level: SettingLevel.DEVICE,
+                newValueAtLevel: false,
+                newValue: false,
+            });
+            await untilEmission(roomViewStore, UPDATE_EVENT);
+            expect(roomViewStore.getPreviewCta().kind).toEqual("needInvite");
+        });
+
+        it("recomputes when the user's own membership changes", async () => {
+            askToJoin(true);
+            knockableRoom();
+            dis.dispatch({ action: Action.ViewRoom, room_id: roomId });
+            await untilDispatch(Action.ActiveRoomChanged, dis);
+            expect(roomViewStore.getPreviewCta().kind).toEqual("ask");
+
+            room.getMyMembership.mockReturnValue(KnownMembership.Knock);
+            dis.dispatch({ action: "MatrixActions.Room.myMembership", room });
+            await untilEmission(roomViewStore, UPDATE_EVENT);
+            expect(roomViewStore.getPreviewCta().kind).toEqual("waiting");
+        });
+
+        it("recomputes when the join rules change", async () => {
+            askToJoin(true);
+            room.getMyMembership.mockReturnValue(KnownMembership.Leave);
+            room.getJoinRule.mockReturnValue(JoinRule.Invite);
+            dis.dispatch({ action: Action.ViewRoom, room_id: roomId });
+            await untilDispatch(Action.ActiveRoomChanged, dis);
+            expect(roomViewStore.getPreviewCta().kind).toEqual("needInvite");
+
+            room.getJoinRule.mockReturnValue(JoinRule.Public);
+            dis.dispatch({
+                action: "MatrixActions.RoomState.events",
+                event: mkEvent({
+                    event: true,
+                    type: EventType.RoomJoinRules,
+                    room: roomId,
+                    user: userId,
+                    skey: "",
+                    content: { join_rule: JoinRule.Public },
+                }),
+                state: { roomId },
+                lastStateEvent: null,
+            });
+            await untilEmission(roomViewStore, UPDATE_EVENT);
+            expect(roomViewStore.getPreviewCta().kind).toEqual("join");
+        });
+
+        it("reports a refused knock the membership never moved for", async () => {
+            askToJoin(true);
+            knockableRoom();
+            dis.dispatch({ action: Action.ViewRoom, room_id: roomId });
+            await untilDispatch(Action.ActiveRoomChanged, dis);
+            expect(roomViewStore.getPreviewCta().kind).toEqual("ask");
+
+            // The knock never reached the client, so the kick which refuses it leaves the
+            // membership at the leave it already was.
+            const kick = mkEvent({
+                event: true,
+                type: EventType.RoomMember,
+                room: roomId,
+                user: "@bob:server",
+                skey: userId,
+                content: { membership: KnownMembership.Leave },
+                prev_content: { membership: KnownMembership.Knock },
+            });
+            vi.mocked(room.currentState).getStateEvents.mockImplementation(mockStateEventImplementation([kick]));
+            room.getMember.mockReturnValue(
+                mkRoomMember(roomId, userId, KnownMembership.Leave, true, { membership: KnownMembership.Knock }),
+            );
+            dis.dispatch({
+                action: "MatrixActions.RoomState.events",
+                event: kick,
+                state: { roomId },
+                lastStateEvent: null,
+            });
+            await untilEmission(roomViewStore, UPDATE_EVENT);
+
+            expect(roomViewStore.getPreviewCta().kind).toEqual("denied");
+        });
+
+        it("ignores a room other than the one being viewed", async () => {
+            askToJoin(true);
+            knockableRoom();
+            dis.dispatch({ action: Action.ViewRoom, room_id: roomId });
+            await untilDispatch(Action.ActiveRoomChanged, dis);
+
+            room.getMyMembership.mockReturnValue(KnownMembership.Knock);
+            dis.dispatch({ action: "MatrixActions.Room.myMembership", room: room2 });
+            await flushPromises();
+            expect(roomViewStore.getPreviewCta().kind).toEqual("ask");
         });
     });
 

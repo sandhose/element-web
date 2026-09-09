@@ -40,6 +40,7 @@ describe("MultiRoomViewStore", () => {
         mockRoomViewStore = {
             viewRoom: vi.fn(),
             dispose: vi.fn(),
+            stop: vi.fn(),
         } as any;
 
         (RoomViewStore as MockedClass<typeof RoomViewStore>).mockImplementation(function () {

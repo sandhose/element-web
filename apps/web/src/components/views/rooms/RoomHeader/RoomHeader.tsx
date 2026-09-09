@@ -19,6 +19,7 @@ import VerifiedIcon from "@vector-im/compound-design-tokens/assets/web/icons/ver
 import ErrorIcon from "@vector-im/compound-design-tokens/assets/web/icons/error-solid";
 import PublicIcon from "@vector-im/compound-design-tokens/assets/web/icons/public";
 import { HistoryVisibility, JoinRule, type Room } from "matrix-js-sdk/src/matrix";
+import { KnownMembership } from "matrix-js-sdk/src/types";
 import { type ViewRoomOpts } from "@matrix-org/react-sdk-module-api/lib/lifecycles/RoomViewLifecycle";
 import { Flex, Box, StatusTextView } from "@element-hq/web-shared-components";
 import { CallType } from "matrix-js-sdk/src/webrtc/call";
@@ -26,7 +27,7 @@ import { HistoryIcon, UserProfileSolidIcon } from "@vector-im/compound-design-to
 
 import { useRoomName } from "../../../../hooks/useRoomName.ts";
 import { RightPanelPhases } from "../../../../stores/right-panel/RightPanelStorePhases.ts";
-import { useRoomMemberCount, useRoomMembers } from "../../../../hooks/useRoomMembers.ts";
+import { useMyRoomMembership, useRoomMemberCount, useRoomMembers } from "../../../../hooks/useRoomMembers.ts";
 import { _t } from "../../../../languageHandler";
 import { getPlatformCallTypeProps, useRoomCall } from "../../../../hooks/room/useRoomCall";
 import { useRoomThreadNotifications } from "../../../../hooks/room/useRoomThreadNotifications.ts";
@@ -430,11 +431,46 @@ function historyVisibilityIcon(historyVisibility: HistoryVisibility): JSX.Elemen
     }
 }
 
+/** The trust icons of a direct message, which cost the device and key queries behind the shield. */
+function DirectMessageTrustIcons({ room }: { room: Room | LocalRoom }): JSX.Element | null {
+    const sdkContext = useContext(SDKContext);
+    const e2eStatus = useEncryptionStatus(sdkContext.client!, room);
+
+    if (e2eStatus === E2EStatus.Verified) {
+        return (
+            <Tooltip label={_t("common|verified")} placement="right">
+                <VerifiedIcon
+                    width="16px"
+                    height="16px"
+                    className="mx_RoomHeader_icon mx_Verified"
+                    aria-label={_t("common|verified")}
+                />
+            </Tooltip>
+        );
+    }
+
+    if (e2eStatus === E2EStatus.Warning) {
+        return (
+            <Tooltip label={_t("room|header_untrusted_label")} placement="right">
+                <ErrorIcon
+                    width="16px"
+                    height="16px"
+                    className="mx_RoomHeader_icon mx_Untrusted"
+                    aria-label={_t("room|header_untrusted_label")}
+                />
+            </Tooltip>
+        );
+    }
+
+    return null;
+}
+
 export default function RoomHeader({
     room,
     extraButtons,
     legacyAdditionalButtons,
     oobData,
+    memberCount,
 }: {
     room: Room | LocalRoom;
     // Extra buttons added by a new element web module API module
@@ -442,6 +478,8 @@ export default function RoomHeader({
     // DEPRECATED: Buttons added by a legacy react-sdk module API module.
     legacyAdditionalButtons?: ViewRoomOpts["buttons"];
     oobData?: IOOBData;
+    /** The member count to show when the room's own state holds no members, as in a preview. */
+    memberCount?: number;
 }): JSX.Element {
     const sdkContext = useContext(SDKContext);
     const roomName = useRoomName(room);
@@ -451,7 +489,10 @@ export default function RoomHeader({
     const isDirectMessage = !!dmMember;
     const dmUserStatus = useUserStatus(dmMember?.userId);
     const isRoomEncrypted = useIsEncrypted(sdkContext.client!, room);
-    const e2eStatus = useEncryptionStatus(sdkContext.client!, room);
+    const myMembership = useMyRoomMembership(room);
+    // A local room is the user's own before it exists on the server; everything else needs a join
+    // before the buttons, the face pile and the encryption shield have anything to work with.
+    const isMember = room instanceof LocalRoom || myMembership === KnownMembership.Join;
     const askToJoinEnabled = useFeatureEnabled("feature_ask_to_join");
     const onAvatarClick = (): void => {
         defaultDispatcher.dispatch({
@@ -515,39 +556,30 @@ export default function RoomHeader({
                                 </Tooltip>
                             )}
 
-                            {isDirectMessage && e2eStatus === E2EStatus.Verified && (
-                                <Tooltip label={_t("common|verified")} placement="right">
-                                    <VerifiedIcon
-                                        width="16px"
-                                        height="16px"
-                                        className="mx_RoomHeader_icon mx_Verified"
-                                        aria-label={_t("common|verified")}
-                                    />
-                                </Tooltip>
-                            )}
-
-                            {isDirectMessage && e2eStatus === E2EStatus.Warning && (
-                                <Tooltip label={_t("room|header_untrusted_label")} placement="right">
-                                    <ErrorIcon
-                                        width="16px"
-                                        height="16px"
-                                        className="mx_RoomHeader_icon mx_Untrusted"
-                                        aria-label={_t("room|header_untrusted_label")}
-                                    />
-                                </Tooltip>
-                            )}
+                            {isDirectMessage && isMember && <DirectMessageTrustIcons room={room} />}
 
                             {isRoomEncrypted && historyVisibilityIcon(historyVisibility)}
                         </Text>
                     </Box>
                 </button>
                 {/* If the room is local-only then we don't want to show any additional buttons, as it won't work */}
-                {room instanceof LocalRoom === false && (
+                {isMember && room instanceof LocalRoom === false && (
                     <RoomHeaderButtons
                         room={room}
                         legacyAdditionalButtons={legacyAdditionalButtons}
                         extraButtons={extraButtons}
                     />
+                )}
+                {!isMember && memberCount !== undefined && (
+                    <Text
+                        as="div"
+                        size="sm"
+                        weight="medium"
+                        className="mx_RoomHeader_members"
+                        aria-label={_t("common|n_members", { count: memberCount })}
+                    >
+                        {formatCount(memberCount)}
+                    </Text>
                 )}
             </Flex>
             {askToJoinEnabled && <RoomKnocksBar room={room} />}

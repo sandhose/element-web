@@ -1053,6 +1053,48 @@ exports[`RoomView > invites > renders an invite room 1`] = `
   <div
     class="mx_RoomView"
   >
+    <header
+      class="_flex_4dswl_9 mx_RoomHeader light-panel"
+      style="--mx-flex-display: flex; --mx-flex-direction: row; --mx-flex-align: center; --mx-flex-justify: start; --mx-flex-gap: var(--cpd-space-3x); --mx-flex-wrap: nowrap;"
+    >
+      <button
+        aria-label="Open room settings"
+        aria-live="off"
+        class="_avatar_va14e_8 mx_BaseAvatar _avatar-imageless_va14e_55"
+        data-color="2"
+        data-testid="avatar-img"
+        data-type="round"
+        role="button"
+        style="--cpd-avatar-size: 40px;"
+        tabindex="-1"
+      >
+        !
+      </button>
+      <button
+        aria-label="Room info"
+        class="mx_RoomHeader_infoWrapper"
+        tabindex="0"
+        type="button"
+      >
+        <div
+          class="mx_RoomHeader_info _box-flex_1odfs_9"
+          style="--mx-box-flex: 1;"
+        >
+          <div
+            aria-level="1"
+            class="_typography_6v6n8_153 _font-body-lg-semibold_6v6n8_74 mx_RoomHeader_heading"
+            dir="auto"
+            role="heading"
+          >
+            <span
+              class="mx_RoomHeader_truncated mx_lineClamp"
+            >
+              !roomviewinvitesrendersaninviteroom:example.org
+            </span>
+          </div>
+        </div>
+      </button>
+    </header>
     <div
       class="mx_RoomPreviewBar mx_RoomPreviewBar_Invite mx_RoomPreviewBar_dialog"
       role="complementary"

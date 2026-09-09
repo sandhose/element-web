@@ -11,6 +11,7 @@ import { createContext } from "react";
 import { type IRoomState } from "../components/structures/RoomView";
 import { Layout } from "../settings/enums/Layout";
 import { type RoomViewStore } from "../stores/RoomViewStore";
+import { PreviewMode } from "../utils/room/previewMode";
 
 export enum TimelineRenderingType {
     Room = "Room",
@@ -73,7 +74,8 @@ const RoomContext = createContext<RoomContextType>({
     liveTimeline: undefined,
     narrow: false,
     msc3946ProcessDynamicPredecessor: false,
-    canAskToJoin: false,
+    previewMode: PreviewMode.Loading,
+    previewCta: { kind: "needInvite", allowedVia: [] },
     promptAskToJoin: false,
     askToJoinCancelled: false,
     viewRoomOpts: { buttons: [] },

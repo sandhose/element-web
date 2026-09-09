@@ -19,6 +19,7 @@ import { addTextToComposer } from "./__mocks__/composer.ts";
 import SendMessageComposer, { createMessageContent, isQuickReaction } from "./SendMessageComposer";
 import MatrixClientContext from "../../../contexts/MatrixClientContext";
 import { type RoomContextType, TimelineRenderingType, MainSplitContentType } from "../../../contexts/RoomContext";
+import { PreviewMode } from "../../../utils/room/previewMode";
 import EditorModel from "../../../editor/model";
 import { createPartCreator } from "../../../../test/unit-tests/editor/mock";
 import { MatrixClientPeg } from "../../../MatrixClientPeg";
@@ -77,7 +78,8 @@ describe("<SendMessageComposer/>", () => {
         resizing: false,
         narrow: false,
         msc3946ProcessDynamicPredecessor: false,
-        canAskToJoin: false,
+        previewMode: PreviewMode.Loading,
+        previewCta: { kind: "needInvite", allowedVia: [] },
         promptAskToJoin: false,
         askToJoinCancelled: false,
         viewRoomOpts: { buttons: [] },

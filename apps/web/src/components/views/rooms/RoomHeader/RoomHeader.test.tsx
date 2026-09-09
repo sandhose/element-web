@@ -113,6 +113,8 @@ describe("RoomHeader", () => {
         room = new Room(ROOM_ID, client, "@alice:example.org", {
             pendingEventOrdering: PendingEventOrdering.Detached,
         });
+        // The header only offers its buttons to a member of the room.
+        vi.spyOn(room, "getMyMembership").mockReturnValue(KnownMembership.Join);
         DMRoomMap.setShared({
             getUserIdForRoomId: vi.fn(),
         } as unknown as DMRoomMap);
@@ -144,6 +146,39 @@ describe("RoomHeader", () => {
     it("renders the room header", () => {
         const { container } = render(<RoomHeader room={room} />, getWrapper());
         expect(container).toHaveTextContent(ROOM_ID);
+    });
+
+    describe("for a room the user is not in", () => {
+        beforeEach(() => {
+            vi.spyOn(room, "getMyMembership").mockReturnValue(KnownMembership.Leave);
+        });
+
+        it("names the room without offering anything a member can do", () => {
+            const { container } = render(<RoomHeader room={room} memberCount={12} />, getWrapper());
+
+            expect(container).toHaveTextContent(ROOM_ID);
+            expect(container.querySelector(".mx_BaseAvatar")).not.toBeNull();
+            expect(container.querySelector(".mx_FacePile")).toBeNull();
+            expect(queryByLabelText(container, "Video call")).toBeNull();
+            expect(queryByLabelText(container, "Voice call")).toBeNull();
+            expect(queryByLabelText(container, "Threads")).toBeNull();
+        });
+
+        it("shows the member count it is given", () => {
+            const { container } = render(<RoomHeader room={room} memberCount={12} />, getWrapper());
+            expect(getByLabelText(container, "12 members")).toHaveTextContent("12");
+        });
+
+        it("does not ask for the encryption status of a direct message", () => {
+            const shieldSpy = vi.spyOn(ShieldUtils, "shieldStatusForRoom");
+            DMRoomMap.setShared({
+                getUserIdForRoomId: () => "@bob:example.org",
+            } as unknown as DMRoomMap);
+            vi.spyOn(room, "getMember").mockReturnValue(new RoomMember(room.roomId, "@bob:example.org"));
+
+            render(<RoomHeader room={room} />, getWrapper());
+            expect(shieldSpy).not.toHaveBeenCalled();
+        });
     });
 
     it("opens the room summary", async () => {

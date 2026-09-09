@@ -10,6 +10,7 @@ import { type EventTimeline, EventType, type MatrixClient, type MatrixEvent, Roo
 import { KnownMembership } from "matrix-js-sdk/src/types";
 
 import { MainSplitContentType, type RoomContextType, TimelineRenderingType } from "../../src/contexts/RoomContext";
+import { PreviewMode } from "../../src/utils/room/previewMode";
 import { Layout } from "../../src/settings/enums/Layout";
 import { mkEvent } from "./test-utils";
 import { SDKContextClass } from "../../src/contexts/SDKContextClass";
@@ -83,7 +84,8 @@ export function getRoomContext(room: Room, override: Partial<RoomContextType>): 
         resizing: false,
         narrow: false,
         msc3946ProcessDynamicPredecessor: false,
-        canAskToJoin: false,
+        previewMode: PreviewMode.Loading,
+        previewCta: { kind: "needInvite", allowedVia: [] },
         promptAskToJoin: false,
         askToJoinCancelled: false,
         viewRoomOpts: { buttons: [] },

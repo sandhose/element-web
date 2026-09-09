@@ -12,7 +12,11 @@ import React, { type ReactNode } from "react";
 import * as utils from "matrix-js-sdk/src/utils";
 import {
     MatrixError,
+    EventType,
+    HistoryVisibility,
     JoinRule,
+    RestrictedAllowType,
+    RoomType,
     SyncState,
     type Room,
     type MatrixEvent,
@@ -52,7 +56,7 @@ import SettingsStore from "../settings/SettingsStore";
 import { awaitRoomDownSync } from "../utils/RoomUpgrade";
 import { UPDATE_EVENT } from "./AsyncStore";
 import { type SDKContextClass } from "../contexts/SDKContextClass";
-import { CallStore } from "./CallStore";
+import { CallStore, CallStoreEvent } from "./CallStore";
 import { type ThreadPayload } from "../dispatcher/payloads/ThreadPayload";
 import { type ActionPayload } from "../dispatcher/payloads";
 import { type CancelAskToJoinPayload } from "../dispatcher/payloads/CancelAskToJoinPayload";
@@ -64,6 +68,16 @@ import { isVideoRoom } from "../utils/video-rooms";
 import { ModuleApi } from "../modules/Api";
 import ActiveWidgetStore from "./ActiveWidgetStore";
 import { type PreviewError, type RoomPreview } from "./RoomPreviewStore";
+import {
+    computePreviewCta,
+    computePreviewMode,
+    PreviewMode,
+    type PreviewCta,
+    type PreviewInput,
+} from "../utils/room/previewMode";
+import { isKnockDenied } from "../utils/membership";
+import { type IRoomStateEventsActionPayload } from "../actions/MatrixActionCreators";
+import { isSettingUpdatedPayload, type SettingUpdatedPayload } from "../dispatcher/payloads/SettingUpdatedPayload";
 
 const NUM_JOIN_RETRY = 5;
 
@@ -138,6 +152,8 @@ interface State {
      * Why the room being viewed has no summary
      */
     summaryError: PreviewError | null;
+    previewMode: PreviewMode;
+    previewCta: PreviewCta;
 }
 
 const INITIAL_STATE: State = {
@@ -163,6 +179,8 @@ const INITIAL_STATE: State = {
     viewRoomOpts: { buttons: [] },
     roomSummary: null,
     summaryError: null,
+    previewMode: PreviewMode.Loading,
+    previewCta: { kind: "needInvite", allowedVia: [] },
 };
 
 type Listener = (isActive: boolean) => void;
@@ -172,6 +190,52 @@ function projectPreview(preview: RoomPreview | null): Partial<State> {
         roomSummary: preview?.summary ?? null,
         summaryError: preview?.error ?? null,
     };
+}
+
+function previewFields(state: State): Pick<State, "previewMode" | "previewCta"> {
+    const roomId = state.roomId;
+    const client = MatrixClientPeg.get();
+    if (!roomId || !client) return { previewMode: PreviewMode.Loading, previewCta: INITIAL_STATE.previewCta };
+
+    const summary = state.roomSummary;
+    const room = client.getRoom(roomId);
+    // A room's own state answers these, so the summary speaks only for a room we have none of.
+    const allow = room?.currentState.getStateEvents(EventType.RoomJoinRules, "")?.getContent().allow as
+        | { type?: string; room_id?: string }[]
+        | undefined;
+    const allowedRoomIds = room
+        ? (allow ?? [])
+              .filter((entry) => entry.type === RestrictedAllowType.RoomMembership && entry.room_id)
+              .map((entry) => entry.room_id!)
+        : (summary?.allowed_room_ids ?? []);
+    const memberEvent = room?.currentState.getStateEvents(EventType.RoomMember, client.getSafeUserId());
+    const wasKnocking = memberEvent?.getPrevContent().membership === KnownMembership.Knock;
+
+    const input: PreviewInput = {
+        isCallRoom: (summary?.room_type ?? room?.getType()) === RoomType.UnstableCall,
+        membership: room ? room.getMyMembership() : summary?.membership,
+        wasKnocking,
+        // `isKnockDenied` looks our member event up again, so only ask where a knock was replaced.
+        knockDenied: wasKnocking && isKnockDenied(room!) === true,
+        joinRule: room ? room.getJoinRule() : summary?.join_rule,
+        allowedRoomIds,
+        joinedAllowedRoomIds: allowedRoomIds.filter(
+            (id) => client.getRoom(id)?.getMyMembership() === KnownMembership.Join,
+        ),
+        canPeek:
+            room?.currentState.getStateEvents(EventType.RoomHistoryVisibility, "")?.getContent().history_visibility ===
+            HistoryVisibility.WorldReadable,
+        hasRoom: room !== null,
+        summaryState: state.summaryError ?? (summary ? "loaded" : "pending"),
+        promptAskToJoin: state.promptAskToJoin,
+        askToJoinEnabled: SettingsStore.getValue("feature_ask_to_join"),
+        callLobbyAvailable:
+            SettingsStore.getValue("feature_video_rooms") &&
+            SettingsStore.getValue("feature_element_call_video_rooms") &&
+            // A lobby with no transport configured can never connect.
+            CallStore.instance.getConfiguredRTCTransports().length > 0,
+    };
+    return { previewMode: computePreviewMode(input), previewCta: computePreviewCta(input) };
 }
 
 /**
@@ -193,7 +257,30 @@ export class RoomViewStore extends EventEmitter {
     ) {
         super();
         this.resetDispatcher(dis);
+        SettingsStore.monitorSetting("feature_ask_to_join", null);
     }
+
+    private watchingRtcTransports = false;
+
+    /**
+     * Watch for the MatrixRTC transports a lobby preview needs. Reading `CallStore.instance` starts
+     * that store, which needs a client, so this waits until a room is actually being viewed.
+     */
+    private watchRtcTransports(): void {
+        if (this.watchingRtcTransports) return;
+        this.watchingRtcTransports = true;
+        CallStore.instance.on(CallStoreEvent.TransportsUpdated, this.onTransportsUpdated);
+    }
+
+    /** Stop listening for what the preview mode is derived from. */
+    public stop(): void {
+        if (this.watchingRtcTransports) {
+            CallStore.instance.off(CallStoreEvent.TransportsUpdated, this.onTransportsUpdated);
+            this.watchingRtcTransports = false;
+        }
+    }
+
+    private onTransportsUpdated = (): void => this.recomputePreview();
 
     /** The rooms this store has already joined on an approved knock. */
     private readonly autoJoinedKnocks = new Set<string>();
@@ -281,6 +368,14 @@ export class RoomViewStore extends EventEmitter {
         this.emit(UPDATE_EVENT);
     }
 
+    /**
+     * Set state and rederive the preview fields from it. Called with nothing when something the
+     * preview reads has changed outside this store.
+     */
+    private recomputePreview(newState: Partial<State> = {}): void {
+        this.setState({ ...newState, ...previewFields({ ...this.state, ...newState }) });
+    }
+
     private onDispatch(payload: ActionPayload): void {
         if (this.lockedToRoomId && payload.room_id && this.lockedToRoomId !== payload.room_id) {
             return;
@@ -302,7 +397,7 @@ export class RoomViewStore extends EventEmitter {
             // for these events blank out the roomId as we are no longer in the RoomView
             case "view_welcome_page":
             case Action.ViewHomePage:
-                this.setState({
+                this.recomputePreview({
                     roomId: null,
                     roomAlias: null,
                     viaServers: [],
@@ -393,7 +488,7 @@ export class RoomViewStore extends EventEmitter {
                 }
                 break;
             case Action.PromptAskToJoin: {
-                this.setState({ promptAskToJoin: true });
+                this.recomputePreview({ promptAskToJoin: true });
                 break;
             }
             case Action.SubmitAskToJoin: {
@@ -408,9 +503,30 @@ export class RoomViewStore extends EventEmitter {
                 this.setViewRoomOpts();
                 break;
             }
+            // The room the user is viewing may arrive, or change, after the view was dispatched.
             case "MatrixActions.Room":
             case "MatrixActions.Room.myMembership": {
                 void this.autoJoinApprovedKnock(payload.room);
+                if (payload.room?.roomId === this.state.roomId) this.recomputePreview();
+                break;
+            }
+            case "MatrixActions.RoomState.events": {
+                const { event, state } = payload as IRoomStateEventsActionPayload;
+                if (state.roomId !== this.state.roomId) break;
+                const type = event.getType();
+                // A refused knock lives in the member event which replaced the knock, and the
+                // membership either side of it is `leave`, so `Room.myMembership` never reports it.
+                const ownMember =
+                    type === EventType.RoomMember && event.getStateKey() === MatrixClientPeg.get()?.getSafeUserId();
+                if (type === EventType.RoomJoinRules || ownMember) {
+                    this.recomputePreview();
+                }
+                break;
+            }
+            case Action.SettingUpdated: {
+                if (isSettingUpdatedPayload(payload as SettingUpdatedPayload, "feature_ask_to_join")) {
+                    this.recomputePreview();
+                }
                 break;
             }
             // The room being viewed only reaches its real membership once the first sync lands.
@@ -423,6 +539,7 @@ export class RoomViewStore extends EventEmitter {
 
     public async viewRoom(payload: ViewRoomPayload): Promise<void> {
         if (payload.room_id) {
+            this.watchRtcTransports();
             const room = MatrixClientPeg.safeGet().getRoom(payload.room_id);
             // A second view of the room already on screen carries no via servers of its own, and a
             // room whose server we cannot guess is only reachable through the ones we arrived with.
@@ -551,11 +668,11 @@ export class RoomViewStore extends EventEmitter {
                 newState.replyingToEvent = this.state.replyingToEvent;
             }
 
-            this.setState(newState);
+            this.recomputePreview(newState);
             this.autoJoinViewedApprovedKnock();
 
             void previewRequest.then((settled) => {
-                if (this.state.roomId === payload.room_id) this.setState(projectPreview(settled));
+                if (this.state.roomId === payload.room_id) this.recomputePreview(projectPreview(settled));
             });
 
             if (payload.auto_join) {
@@ -638,7 +755,7 @@ export class RoomViewStore extends EventEmitter {
     }
 
     private viewRoomError(payload: ViewRoomErrorPayload): void {
-        this.setState({
+        this.recomputePreview({
             roomId: payload.room_id,
             roomAlias: payload.room_alias,
             roomLoading: false,
@@ -887,6 +1004,14 @@ export class RoomViewStore extends EventEmitter {
         return this.state.summaryError;
     }
 
+    public getPreviewMode(): PreviewMode {
+        return this.state.previewMode;
+    }
+
+    public getPreviewCta(): PreviewCta {
+        return this.state.previewCta;
+    }
+
     public getWasContextSwitch(): boolean {
         return this.state.wasContextSwitch;
     }
@@ -963,7 +1088,7 @@ export class RoomViewStore extends EventEmitter {
         previewStore.release(payload.roomId);
         const settled = await previewStore.request(payload.roomId, { viaServers: this.state.viaServers });
         if (this.state.roomId !== payload.roomId) return;
-        this.setState({ ...projectPreview(settled), askToJoinCancelled: true });
+        this.recomputePreview({ ...projectPreview(settled), askToJoinCancelled: true });
     }
 
     /**
