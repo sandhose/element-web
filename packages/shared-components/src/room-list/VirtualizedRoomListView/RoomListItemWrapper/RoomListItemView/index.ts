@@ -12,6 +12,7 @@ export type {
     RoomListItemViewModel,
     RoomListItemViewActions,
     RoomListItemViewProps,
+    RoomPreviewState,
     Section,
 } from "./RoomListItemView";
 export { RoomListItemContent } from "./RoomListItemContent";

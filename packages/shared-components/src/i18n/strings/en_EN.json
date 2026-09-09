@@ -217,6 +217,10 @@
         },
         "notification_options": "Notification options",
         "open_space_menu": "Open space menu",
+        "preview_state": {
+            "denied": "Declined",
+            "pending": "Pending"
+        },
         "primary_filters": "Room list filters",
         "room": {
             "more_options": "More Options"

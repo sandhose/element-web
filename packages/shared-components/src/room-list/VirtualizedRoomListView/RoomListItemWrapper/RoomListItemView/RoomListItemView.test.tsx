@@ -133,6 +133,19 @@ describe("<RoomListItemView />", () => {
         expect(container.querySelector('[aria-label="More Options"]')).toBeNull();
     });
 
+    it.each([
+        ["pending", "Pending"],
+        ["denied", "Declined"],
+    ] as const)("labels a %s row", (previewState, label) => {
+        render(<Default previewState={previewState} />);
+        expect(screen.getByTestId("preview-state")).toHaveTextContent(label);
+    });
+
+    it("does not label a row the user is a member of", () => {
+        render(<Default />);
+        expect(screen.queryByTestId("preview-state")).toBeNull();
+    });
+
     it("reveals the hover menu on keyboard focus and clears it when focus leaves", async () => {
         // isFocused focuses the row via the keyboard on mount, so the hover menu is revealed.
         const { container } = render(<WithHoverMenu isFocused={true} />);

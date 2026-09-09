@@ -13,8 +13,18 @@ import { Flex } from "../../../../core/utils/Flex";
 import { useViewModel } from "../../../../core/viewmodel";
 import { NotificationDecoration } from "./NotificationDecoration";
 import { RoomListItemHoverMenu } from "./RoomListItemHoverMenu";
-import { type Room, type RoomListItemViewModel } from "./RoomListItemView";
+import { type Room, type RoomListItemViewModel, type RoomPreviewState } from "./RoomListItemView";
 import styles from "./RoomListItemView.module.css";
+import { _t } from "../../../../core/i18n/i18n";
+
+function getPreviewStateLabel(previewState: RoomPreviewState): string {
+    switch (previewState) {
+        case "pending":
+            return _t("room_list|preview_state|pending");
+        case "denied":
+            return _t("room_list|preview_state|denied");
+    }
+}
 
 /**
  * Props for {@link RoomListItemContent}.
@@ -75,6 +85,12 @@ export const RoomListItemContent = memo(function RoomListItemContent({
                         showNotificationMenu={item.showNotificationMenu}
                         vm={vm}
                     />
+                )}
+
+                {item.previewState && (
+                    <Text as="span" size="sm" className={styles.previewState} data-testid="preview-state">
+                        {getPreviewStateLabel(item.previewState)}
+                    </Text>
                 )}
 
                 {/* aria-hidden because we summarise the unread count/notification status in a11yLabel */}

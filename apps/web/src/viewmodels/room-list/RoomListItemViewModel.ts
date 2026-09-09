@@ -10,6 +10,7 @@ import {
     RoomNotifState,
     type RoomListItemViewSnapshot,
     type RoomListItemViewActions,
+    type RoomPreviewState,
     type Section,
     type UserStatus,
 } from "@element-hq/web-shared-components";
@@ -27,6 +28,7 @@ import DMRoomMap from "../../utils/DMRoomMap";
 import SettingsStore from "../../settings/SettingsStore";
 import { NotificationLevel } from "../../stores/notifications/NotificationLevel";
 import { hasAccessToNotificationMenu, hasAccessToOptionsMenu } from "./utils";
+import { isKnockDenied } from "../../utils/membership";
 import { EchoChamber } from "../../stores/local-echo/EchoChamber";
 import { RoomNotifState as ElementRoomNotifState } from "../../RoomNotifs";
 import { shouldShowComponent } from "../../customisations/helpers/UIComponents";
@@ -134,6 +136,8 @@ export class RoomListItemViewModel
         // Subscribe to room-specific events
         this.disposables.trackListener(props.room, RoomEvent.Name, this.onRoomChanged);
         this.disposables.trackListener(props.room, RoomEvent.Tags, this.onRoomChanged);
+        // Membership drives previewState, so a knock being granted or refused relabels the row.
+        this.disposables.trackListener(props.room, RoomEvent.MyMembership, this.onRoomChanged);
 
         // Rebuild the available sections when their order changes or when one is created/renamed/removed
         const orderSectionsRef = SettingsStore.watchSetting("RoomList.OrderedCustomSections", null, () =>
@@ -416,7 +420,17 @@ export class RoomListItemViewModel
             sections,
             areSectionsEnabled,
             canChangeSection,
+            previewState: RoomListItemViewModel.computePreviewState(room),
         };
+    }
+
+    /**
+     * Where the user's request to join this room has got to, or undefined if they made none.
+     */
+    private static computePreviewState(room: Room): RoomPreviewState | undefined {
+        if (room.getMyMembership() === KnownMembership.Knock) return "pending";
+        if (isKnockDenied(room)) return "denied";
+        return undefined;
     }
 
     public onOpenRoom = (): void => {

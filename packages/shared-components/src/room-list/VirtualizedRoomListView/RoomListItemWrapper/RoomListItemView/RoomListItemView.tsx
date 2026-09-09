@@ -59,6 +59,12 @@ export interface Section {
 }
 
 /**
+ * Where the user's request to join a room has got to: awaiting an answer (`pending`) or refused
+ * (`denied`).
+ */
+export type RoomPreviewState = "pending" | "denied";
+
+/**
  * Snapshot for a room list item.
  * Contains all the data needed to render a room in the list.
  */
@@ -106,6 +112,8 @@ export interface RoomListItemViewSnapshot {
      * that assign a section (Favourited, Low priority and "Move to").
      */
     canChangeSection: boolean;
+    /** Where the user's request to join this room has got to, if they made one. */
+    previewState?: RoomPreviewState;
 }
 
 /**

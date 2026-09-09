@@ -35,6 +35,7 @@ import { CallEvent, type Call } from "../../models/Call";
 import { RoomListItemViewModel } from "./RoomListItemViewModel";
 import RoomListStoreV3 from "../../stores/room-list-v3/RoomListStoreV3";
 import * as tagRoomModule from "../../utils/room/tagRoom";
+import * as membership from "../../utils/membership";
 import { CHATS_TAG } from "../../stores/room-list-v3/section";
 
 vi.mock("./utils", () => ({
@@ -709,6 +710,41 @@ describe("RoomListItemViewModel", () => {
 
             viewModel = new RoomListItemViewModel({ room, client: matrixClient });
             expect(viewModel.getSnapshot().canChangeSection).toBe(expected);
+        });
+    });
+
+    describe("Preview state", () => {
+        it("should be undefined for a joined room", () => {
+            vi.spyOn(room, "getMyMembership").mockReturnValue(KnownMembership.Join);
+            viewModel = new RoomListItemViewModel({ room, client: matrixClient });
+
+            expect(viewModel.getSnapshot().previewState).toBeUndefined();
+        });
+
+        it("should be pending while knocking", () => {
+            vi.spyOn(room, "getMyMembership").mockReturnValue(KnownMembership.Knock);
+            viewModel = new RoomListItemViewModel({ room, client: matrixClient });
+
+            expect(viewModel.getSnapshot().previewState).toBe("pending");
+        });
+
+        it("should be denied when the knock was refused", () => {
+            vi.spyOn(room, "getMyMembership").mockReturnValue(KnownMembership.Leave);
+            vi.spyOn(membership, "isKnockDenied").mockReturnValue(true);
+            viewModel = new RoomListItemViewModel({ room, client: matrixClient });
+
+            expect(viewModel.getSnapshot().previewState).toBe("denied");
+        });
+
+        it("should relabel the row when the knock is answered", () => {
+            vi.spyOn(room, "getMyMembership").mockReturnValue(KnownMembership.Knock);
+            viewModel = new RoomListItemViewModel({ room, client: matrixClient });
+            expect(viewModel.getSnapshot().previewState).toBe("pending");
+
+            vi.spyOn(room, "getMyMembership").mockReturnValue(KnownMembership.Join);
+            room.emit(RoomEvent.MyMembership, room, KnownMembership.Join, KnownMembership.Knock);
+
+            expect(viewModel.getSnapshot().previewState).toBeUndefined();
         });
     });
 
