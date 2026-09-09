@@ -55,6 +55,40 @@ Please see LICENSE files in the repository root for full details.
     display: flex;
 }
 
+.mx_RoomPreviewBar_identity {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--cpd-space-1x);
+    max-width: 100%;
+
+    h3 {
+        margin: var(--cpd-space-3x) 0 0 0;
+    }
+
+    .mx_RoomPreviewBar_identity_alias,
+    .mx_RoomPreviewBar_identity_members {
+        color: var(--cpd-color-text-secondary);
+        font: var(--cpd-font-body-sm-regular);
+    }
+
+    .mx_RoomPreviewBar_identity_members {
+        background: var(--cpd-color-bg-subtle-secondary);
+        border-radius: var(--cpd-space-2x);
+        padding: 0 var(--cpd-space-2x);
+    }
+
+    .mx_RoomPreviewBar_identity_topic {
+        margin: var(--cpd-space-2x) 0 0 0;
+        color: var(--cpd-color-text-secondary);
+        /* Four lines of topic, then an ellipsis. */
+        display: -webkit-box;
+        -webkit-line-clamp: 4;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+    }
+}
+
 .mx_RoomPreviewBar_reason .mx_Field {
     width: 100%;
 }

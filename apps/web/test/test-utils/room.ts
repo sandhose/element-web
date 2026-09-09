@@ -86,6 +86,8 @@ export function getRoomContext(room: Room, override: Partial<RoomContextType>): 
         msc3946ProcessDynamicPredecessor: false,
         previewMode: PreviewMode.Loading,
         previewCta: { kind: "needInvite", allowedVia: [] },
+        roomSummary: null,
+        summaryError: null,
         promptAskToJoin: false,
         askToJoinCancelled: false,
         viewRoomOpts: { buttons: [] },

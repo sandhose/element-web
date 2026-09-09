@@ -37,6 +37,7 @@ import {
     type ISearchResults,
     THREAD_RELATION_TYPE,
     type MatrixClient,
+    type RoomSummary,
 } from "matrix-js-sdk/src/matrix";
 import { KnownMembership } from "matrix-js-sdk/src/types";
 import { logger } from "matrix-js-sdk/src/logger";
@@ -119,6 +120,7 @@ import { type ShowThreadPayload } from "../../dispatcher/payloads/ShowThreadPayl
 import { LargeLoader } from "./LargeLoader";
 import { isVideoRoom } from "../../utils/video-rooms";
 import { isKnockCta, PreviewMode, type PreviewCta } from "../../utils/room/previewMode";
+import { type PreviewError } from "../../stores/RoomPreviewStore";
 import { SDKContext } from "../../contexts/SDKContext";
 import { RoomSearchView } from "./RoomSearchView";
 import eventSearch, { type SearchInfo, SearchScope } from "../../Searching";
@@ -290,6 +292,8 @@ export interface IRoomState {
 
     previewMode: PreviewMode;
     previewCta: PreviewCta;
+    roomSummary: RoomSummary | null;
+    summaryError: PreviewError | null;
     promptAskToJoin: boolean;
     askToJoinCancelled: boolean;
 
@@ -505,6 +509,8 @@ export class RoomView extends React.Component<IRoomProps, IRoomState> {
             msc3946ProcessDynamicPredecessor: SettingsStore.getValue("feature_dynamic_room_predecessors"),
             previewMode: this.roomViewStore.getPreviewMode(),
             previewCta: this.roomViewStore.getPreviewCta(),
+            roomSummary: this.roomViewStore.getRoomSummary(),
+            summaryError: this.roomViewStore.getSummaryError(),
             promptAskToJoin: false,
             askToJoinCancelled: false,
             viewRoomOpts: { buttons: [] },
@@ -662,6 +668,8 @@ export class RoomView extends React.Component<IRoomProps, IRoomState> {
             askToJoinCancelled: roomViewStore.hasCancelledAskToJoin(),
             previewMode: roomViewStore.getPreviewMode(),
             previewCta: roomViewStore.getPreviewCta(),
+            roomSummary: roomViewStore.getRoomSummary(),
+            summaryError: roomViewStore.getSummaryError(),
             viewRoomOpts: viewRoomOpts,
         };
 
@@ -2329,7 +2337,7 @@ export class RoomView extends React.Component<IRoomProps, IRoomState> {
 
     /** The member count of a room whose own state holds no members. */
     private previewMemberCount(): number | undefined {
-        return this.roomViewStore.getRoomSummary()?.num_joined_members;
+        return this.state.roomSummary?.num_joined_members;
     }
 
     private renderPreviewBar(mode: PreviewMode): ReactNode {
@@ -2374,6 +2382,9 @@ export class RoomView extends React.Component<IRoomProps, IRoomState> {
                     askToJoinCancelled={this.state.askToJoinCancelled}
                     onSubmitAskToJoin={this.onSubmitAskToJoin}
                     onCancelAskToJoin={this.onCancelAskToJoin}
+                    summary={this.state.roomSummary}
+                    summaryError={this.state.summaryError}
+                    previewCta={this.state.previewCta}
                 />
             );
         }
@@ -2437,6 +2448,9 @@ export class RoomView extends React.Component<IRoomProps, IRoomState> {
                 knocked={myMembership === KnownMembership.Knock}
                 onSubmitAskToJoin={this.onSubmitAskToJoin}
                 onCancelAskToJoin={this.onCancelAskToJoin}
+                summary={this.state.roomSummary}
+                summaryError={this.state.summaryError}
+                previewCta={this.state.previewCta}
             />
         );
     }

@@ -7,7 +7,15 @@ Please see LICENSE files in the repository root for full details.
 */
 
 import React, { type JSX, type ChangeEvent, type ReactNode } from "react";
-import { type Room, type RoomMember, EventType, RoomType, JoinRule, type MatrixError } from "matrix-js-sdk/src/matrix";
+import {
+    type Room,
+    type RoomMember,
+    type RoomSummary,
+    EventType,
+    RoomType,
+    JoinRule,
+    type MatrixError,
+} from "matrix-js-sdk/src/matrix";
 import { KnownMembership, type RoomJoinRulesEventContent } from "matrix-js-sdk/src/types";
 import classNames from "classnames";
 import {
@@ -32,11 +40,24 @@ import { UIFeature } from "../../../settings/UIFeature";
 import { ModuleRunner } from "../../../modules/ModuleRunner";
 import Field from "../elements/Field";
 import { ModuleApi } from "../../../modules/Api.ts";
+import { type PreviewCta } from "../../../utils/room/previewMode.ts";
+import { type PreviewError } from "../../../stores/RoomPreviewStore.ts";
+import { formatCount } from "../../../utils/FormattingUtils.ts";
+import { getTopic } from "../../../hooks/room/useTopic.ts";
 
 const MemberEventHtmlReasonField = "io.element.html_reason";
 
 /** The most a knock reason may carry, so that a server which rejects longer ones is never reached. */
 const KNOCK_REASON_MAX_LENGTH = 500;
+
+interface PreviewIdentity {
+    name?: string;
+    /** The mxc URI of the room's avatar. */
+    avatarUrl?: string;
+    alias?: string;
+    topic?: string;
+    memberCount?: number;
+}
 
 enum MessageCase {
     NotLoggedIn = "NotLoggedIn",
@@ -56,7 +77,25 @@ enum MessageCase {
     PromptAskToJoin = "PromptAskToJoin",
     Knocked = "Knocked",
     RequestDenied = "requestDenied",
+    /** The room can only be joined by members of rooms the user is not in. */
+    NotAllowed = "NotAllowed",
+    /** The room can only be joined by invitation. */
+    NeedInvite = "NeedInvite",
+    /** The server does not know the room, or will not admit to knowing it. */
+    SummaryNotFound = "SummaryNotFound",
+    /** The server knows the room but will not describe it. */
+    SummaryForbidden = "SummaryForbidden",
 }
+
+const IDENTITY_CASES = new Set([
+    MessageCase.ViewingRoom,
+    MessageCase.PromptAskToJoin,
+    MessageCase.Knocked,
+    MessageCase.RequestDenied,
+    MessageCase.Banned,
+    MessageCase.NotAllowed,
+    MessageCase.NeedInvite,
+]);
 
 interface IProps {
     // if inviterName is specified, the preview bar will shown an invite to the room.
@@ -107,6 +146,13 @@ interface IProps {
     onCancelAskToJoin?(): void;
     /** Whether the user withdrew their last request to join this room. */
     askToJoinCancelled?: boolean;
+
+    /** The MSC3266 summary of the room, which describes it whether or not the user is in it. */
+    summary?: RoomSummary | null;
+    /** Why the room has no summary. */
+    summaryError?: PreviewError | null;
+    /** The one action which applies to the user for this room. */
+    previewCta?: PreviewCta;
 }
 
 interface IState {
@@ -222,15 +268,33 @@ class RoomPreviewBar extends React.Component<IProps, IState> {
                 }
             }
             return MessageCase.Invite;
-        } else if (this.props.error) {
-            if (this.props.error.errcode === "M_NOT_FOUND") {
-                return MessageCase.RoomNotFound;
-            } else {
-                return MessageCase.OtherError;
-            }
-        } else {
-            return MessageCase.ViewingRoom;
         }
+
+        if (this.props.error) {
+            return this.props.error.errcode === "M_NOT_FOUND" ? MessageCase.RoomNotFound : MessageCase.OtherError;
+        }
+
+        // Without a summary there is no identity and no join rule, so why it is missing is all
+        // there is to say about the room.
+        if (this.props.summaryError === "notFound") return MessageCase.SummaryNotFound;
+        if (this.props.summaryError === "forbidden") return MessageCase.SummaryForbidden;
+
+        switch (this.props.previewCta?.kind) {
+            case "ask":
+                return MessageCase.PromptAskToJoin;
+            case "waiting":
+                return MessageCase.Knocked;
+            case "denied":
+                return MessageCase.RequestDenied;
+            case "banned":
+                return MessageCase.Banned;
+            case "notAllowed":
+                return MessageCase.NotAllowed;
+            case "needInvite":
+                return MessageCase.NeedInvite;
+        }
+
+        return MessageCase.ViewingRoom;
     }
 
     private getKickOrBanInfo(): { memberName?: string; reason?: string } {
@@ -306,9 +370,64 @@ class RoomPreviewBar extends React.Component<IProps, IState> {
         this.setState({ reason: event.target.value });
     };
 
+    /** The name of the first room in the CTA's allow list the user's client knows about. */
+    private allowedViaName(): string | undefined {
+        const client = MatrixClientPeg.get();
+        if (!client) return undefined;
+        for (const roomId of this.props.previewCta?.allowedVia ?? []) {
+            const name = client.getRoom(roomId)?.name;
+            if (name) return name;
+        }
+        return undefined;
+    }
+
+    /**
+     * The summary comes first everywhere: a room the user left keeps the state it had then, so its
+     * own name and topic can be older than what the server describes.
+     */
+    private identity(): PreviewIdentity {
+        const { summary, room, oobData, roomAlias } = this.props;
+        const joinedMembers = room?.getJoinedMemberCount() ?? 0;
+
+        return {
+            name: summary?.name ?? room?.name ?? oobData?.name ?? oobData?.room_name,
+            avatarUrl: summary?.avatar_url ?? room?.getMxcAvatarUrl() ?? oobData?.avatarUrl,
+            alias: summary?.canonical_alias ?? room?.getCanonicalAlias() ?? roomAlias,
+            topic: summary?.topic ?? getTopic(room ?? undefined)?.text,
+            // A hydrated room has no members at all, and a count of none reads as a fact about it.
+            memberCount: summary?.num_joined_members ?? (joinedMembers > 0 ? joinedMembers : undefined),
+        };
+    }
+
+    /** The room as the summary describes it: avatar, name, alias, member count and topic. */
+    private renderIdentity(identity: PreviewIdentity, withDetails: boolean): JSX.Element {
+        const { alias, memberCount, topic } = identity;
+        return (
+            <div className="mx_RoomPreviewBar_identity">
+                <RoomAvatar
+                    room={this.props.room}
+                    oobData={{ name: identity.name, avatarUrl: identity.avatarUrl }}
+                    size="80px"
+                />
+                <h3>{identity.name}</h3>
+                {withDetails && alias && <div className="mx_RoomPreviewBar_identity_alias">{alias}</div>}
+                {withDetails && memberCount !== undefined && (
+                    <div
+                        className="mx_RoomPreviewBar_identity_members"
+                        aria-label={_t("common|n_members", { count: memberCount })}
+                    >
+                        {formatCount(memberCount)}
+                    </div>
+                )}
+                {withDetails && topic && <p className="mx_RoomPreviewBar_identity_topic">{topic}</p>}
+            </div>
+        );
+    }
+
     public render(): React.ReactNode {
         const brand = SdkConfig.get().brand;
-        const roomName = this.props.room?.name ?? this.props.roomAlias ?? "";
+        const identity = this.identity();
+        const roomName = identity.name ?? this.props.roomAlias ?? "";
         const isSpace = this.props.room?.isSpaceRoom() ?? this.props.oobData?.roomType === RoomType.Space;
 
         let showSpinner = false;
@@ -324,6 +443,9 @@ class RoomPreviewBar extends React.Component<IProps, IState> {
         let footer: JSX.Element | undefined;
 
         const messageCase = this.getMessageCase();
+        // The thin panel form of the bar sits under a timeline which names the room already.
+        const showIdentity = !this.props.canPreview && !!identity.name && IDENTITY_CASES.has(messageCase);
+
         switch (messageCase) {
             case MessageCase.Joining: {
                 if (this.props.oobData?.roomType || isSpace) {
@@ -415,7 +537,9 @@ class RoomPreviewBar extends React.Component<IProps, IState> {
             }
             case MessageCase.Banned: {
                 const { memberName, reason } = this.getKickOrBanInfo();
-                if (roomName) {
+                if (!memberName) {
+                    title = _t("room|banned_from_this_room");
+                } else if (roomName && !showIdentity) {
                     title = _t("room|banned_from_room_by", { memberName, roomName });
                 } else {
                     title = _t("room|banned_by", { memberName });
@@ -566,13 +690,37 @@ class RoomPreviewBar extends React.Component<IProps, IState> {
             case MessageCase.ViewingRoom: {
                 if (this.props.canPreview) {
                     title = _t("room|peek_join_prompt", { roomName });
+                } else if (showIdentity) {
+                    const spaceName = this.allowedViaName();
+                    if (spaceName) subTitle = _t("room|preview_allowed_via", { spaceName });
                 } else if (roomName) {
                     title = _t("room|no_peek_join_prompt", { roomName });
                 } else {
                     title = _t("room|no_peek_no_name_join_prompt");
                 }
-                primaryActionLabel = _t("room|join_the_discussion");
+                primaryActionLabel = showIdentity ? _t("room|preview_join_action") : _t("room|join_the_discussion");
                 primaryActionHandler = this.props.onJoinClick;
+                break;
+            }
+            case MessageCase.NotAllowed: {
+                const spaceName = this.allowedViaName();
+                subTitle = spaceName
+                    ? _t("room|preview_not_allowed_via", { spaceName })
+                    : _t("room|preview_not_allowed");
+                break;
+            }
+            case MessageCase.NeedInvite: {
+                subTitle = isSpace ? _t("room|preview_need_invite_space") : _t("room|preview_need_invite");
+                break;
+            }
+            case MessageCase.SummaryNotFound: {
+                title = _t("room|preview_not_found_title");
+                subTitle = _t("room|preview_not_found_subtitle");
+                break;
+            }
+            case MessageCase.SummaryForbidden: {
+                title = _t("room|preview_forbidden_title");
+                subTitle = _t("room|preview_forbidden_subtitle");
                 break;
             }
             case MessageCase.RoomNotFound: {
@@ -611,14 +759,13 @@ class RoomPreviewBar extends React.Component<IProps, IState> {
                 break;
             }
             case MessageCase.PromptAskToJoin: {
-                if (roomName) {
-                    title = _t("room|knock_prompt_name", { roomName });
+                if (showIdentity) {
+                    subTitle = [_t("room|knock_subtitle")];
                 } else {
-                    title = _t("room|knock_prompt");
+                    title = roomName ? _t("room|knock_prompt_name", { roomName }) : _t("room|knock_prompt");
+                    const avatar = <RoomAvatar room={this.props.room} oobData={this.props.oobData} />;
+                    subTitle = [avatar, _t("room|knock_subtitle")];
                 }
-
-                const avatar = <RoomAvatar room={this.props.room} oobData={this.props.oobData} />;
-                subTitle = [avatar, _t("room|knock_subtitle")];
                 if (this.props.askToJoinCancelled) {
                     subTitle = [_t("room|knock_cancelled"), ...subTitle];
                 }
@@ -684,8 +831,9 @@ class RoomPreviewBar extends React.Component<IProps, IState> {
                     {title}
                 </h3>
             );
-        } else {
-            titleElement = <h3>{title}</h3>;
+        } else if (title !== undefined) {
+            // The identity block carries the room's name as the heading where there is one.
+            titleElement = showIdentity ? <p>{title}</p> : <h3>{title}</h3>;
         }
 
         let primaryButton;
@@ -739,6 +887,7 @@ class RoomPreviewBar extends React.Component<IProps, IState> {
 
         return (
             <div role="complementary" className={classes}>
+                {showIdentity && this.renderIdentity(identity, messageCase !== MessageCase.Banned)}
                 <div className="mx_RoomPreviewBar_message">
                     {titleElement}
                     {subTitleElements}

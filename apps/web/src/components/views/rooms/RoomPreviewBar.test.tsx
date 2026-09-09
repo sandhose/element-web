@@ -11,7 +11,7 @@ Please see LICENSE files in the repository root for full details.
 import React, { type ComponentProps } from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, fireEvent, type RenderResult, waitFor, waitForElementToBeRemoved } from "test-utils-rtl";
-import { Room, type RoomMember, MatrixError, type IContent } from "matrix-js-sdk/src/matrix";
+import { Room, type RoomMember, MatrixError, type IContent, type RoomSummary } from "matrix-js-sdk/src/matrix";
 import { KnownMembership } from "matrix-js-sdk/src/types";
 import { withClientContextRenderOptions, stubClient } from "test-utils";
 
@@ -534,6 +534,162 @@ describe("<RoomPreviewBar />", () => {
 
             fireEvent.click(getSecondaryActionButton(component)!);
             expect(onCancelAskToJoin).toHaveBeenCalled();
+        });
+    });
+
+    describe("with a preview CTA", () => {
+        const makeSummary = (extra: Partial<RoomSummary> = {}): RoomSummary => ({
+            room_id: roomId,
+            num_joined_members: 10,
+            world_readable: false,
+            guest_can_join: false,
+            name: "Coffee break",
+            topic: "Where we drink coffee",
+            canonical_alias: "#coffeebreak:test.com",
+            avatar_url: "mxc://test.com/coffee",
+            ...extra,
+        });
+
+        const getIdentity = (wrapper: RenderResult) =>
+            wrapper.container.querySelector<HTMLDivElement>(".mx_RoomPreviewBar_identity");
+
+        const namedSpace = (name: string) => {
+            const space = createRoom("!space:test.com", userId);
+            vi.spyOn(space, "name", "get").mockReturnValue(name);
+            vi.spyOn(MatrixClientPeg.safeGet(), "getRoom").mockReturnValue(space);
+        };
+
+        it("names the room, its alias, its member count and its topic", () => {
+            const component = getComponent({ summary: makeSummary(), previewCta: { kind: "join", allowedVia: [] } });
+
+            const identity = getIdentity(component);
+            expect(identity?.textContent).toContain("Coffee break");
+            expect(identity?.textContent).toContain("#coffeebreak:test.com");
+            expect(identity?.textContent).toContain("10");
+            expect(identity?.textContent).toContain("Where we drink coffee");
+            expect(getPrimaryActionButton(component)?.textContent).toEqual("Join room");
+        });
+
+        it("says which room a restricted join is allowed by", () => {
+            namedSpace("Design");
+            const component = getComponent({
+                summary: makeSummary(),
+                previewCta: { kind: "join", allowedVia: ["!space:test.com"] },
+            });
+
+            expect(getMessage(component)?.textContent).toContain("You can join because you are a member of Design");
+        });
+
+        it("names the room whose members may join one the user is not allowed into", () => {
+            namedSpace("Design");
+            const component = getComponent({
+                summary: makeSummary(),
+                previewCta: { kind: "notAllowed", allowedVia: ["!space:test.com"] },
+            });
+
+            expect(getMessage(component)?.textContent).toEqual("Members of Design can join.");
+            expect(getPrimaryActionButton(component)).toBeFalsy();
+        });
+
+        it("falls back to generic copy when the allowing room is unknown", () => {
+            vi.spyOn(MatrixClientPeg.safeGet(), "getRoom").mockReturnValue(null);
+            const component = getComponent({
+                summary: makeSummary(),
+                previewCta: { kind: "notAllowed", allowedVia: ["!unknown:test.com"] },
+            });
+
+            expect(getMessage(component)?.textContent).toEqual(
+                "You may need to be invited or be a member of a space in order to join.",
+            );
+        });
+
+        it("names the room a request is pending on, and offers to cancel it", () => {
+            const component = getComponent({
+                summary: makeSummary(),
+                previewCta: { kind: "waiting", allowedVia: [] },
+                onCancelAskToJoin: () => {},
+            });
+
+            expect(getIdentity(component)?.textContent).toContain("Coffee break");
+            expect(getMessage(component)?.textContent).toContain("Request to join sent");
+            expect(getMessage(component)?.textContent).toContain(
+                "You will receive an invite to join the room if your request is accepted.",
+            );
+            expect(getSecondaryActionButton(component)?.textContent).toEqual("Cancel request");
+        });
+
+        it("names the room a request was denied on, and offers to forget it", () => {
+            const component = getComponent({
+                summary: makeSummary(),
+                previewCta: { kind: "denied", allowedVia: [] },
+                onForgetClick: () => {},
+            });
+
+            expect(getIdentity(component)?.textContent).toContain("Coffee break");
+            expect(getMessage(component)?.textContent).toContain("You have been denied access");
+            expect(getPrimaryActionButton(component)?.textContent).toEqual("Forget this room");
+        });
+
+        it("shows a banned room by name only, and offers to forget it", () => {
+            const component = getComponent({
+                summary: makeSummary(),
+                previewCta: { kind: "banned", allowedVia: [] },
+                onForgetClick: () => {},
+            });
+
+            const identity = getIdentity(component);
+            expect(identity?.textContent).toContain("Coffee break");
+            expect(identity?.textContent).not.toContain("Where we drink coffee");
+            expect(identity?.textContent).not.toContain("10");
+            expect(getMessage(component)?.textContent).toContain("You were banned from this room");
+            expect(getPrimaryActionButton(component)?.textContent).toEqual("Forget this room");
+        });
+
+        it("keeps the room's identity while saying an invite is needed", () => {
+            const component = getComponent({
+                summary: makeSummary(),
+                previewCta: { kind: "needInvite", allowedVia: [] },
+            });
+
+            expect(getIdentity(component)?.textContent).toContain("Where we drink coffee");
+            expect(getMessage(component)?.textContent).toEqual("You need an invite in order to join this room.");
+            expect(getPrimaryActionButton(component)).toBeFalsy();
+        });
+
+        it("does not show a card in the panel under a peeked timeline", () => {
+            const component = getComponent({
+                summary: makeSummary(),
+                previewCta: { kind: "join", allowedVia: [] },
+                canPreview: true,
+            });
+
+            expect(getIdentity(component)).toBeFalsy();
+            expect(getMessage(component)?.textContent).toEqual("You're previewing Coffee break. Want to join it?");
+        });
+    });
+
+    describe("with a summary error", () => {
+        it("says a room which was not found may need an invite", () => {
+            const component = getComponent({ summaryError: "notFound" });
+
+            expect(getMessage(component)?.textContent).toContain("Room not found");
+            expect(getMessage(component)?.textContent).toContain(
+                "This room may not exist, or you may need an invite to see it.",
+            );
+        });
+
+        it("says a room the server will not describe needs an invite from someone in it", () => {
+            const component = getComponent({ summaryError: "forbidden" });
+
+            expect(getMessage(component)?.textContent).toContain("You do not have access to this room");
+            expect(getMessage(component)?.textContent).toContain("Ask someone in the room to invite you.");
+        });
+
+        it("still offers a join when the summary is merely unavailable", () => {
+            const component = getComponent({ summaryError: "unavailable", onJoinClick: () => {} });
+
+            expect(getMessage(component)?.textContent).not.toContain("Room not found");
+            expect(getPrimaryActionButton(component)?.textContent).toEqual("Join room");
         });
     });
 

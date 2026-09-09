@@ -968,6 +968,35 @@ describe("RoomView", () => {
             expect(container.querySelector(".mx_RoomPreviewBar")).toBeNull();
         });
 
+        it.each([
+            ["notFound" as const, "This room may not exist, or you may need an invite to see it."],
+            ["forbidden" as const, "Ask someone in the room to invite you."],
+        ])("says why a summary error leaves nothing to preview: %s", async (error, copy) => {
+            previewing(error === "notFound" ? PreviewMode.NotFound : PreviewMode.Forbidden);
+            vi.spyOn(stores.roomViewStore, "getSummaryError").mockReturnValue(error);
+            const { container } = await mountRoomView();
+            expect(container.querySelector(".mx_RoomPreviewBar")).toHaveTextContent(copy);
+        });
+
+        it("shows the room the summary describes above the action that applies", async () => {
+            previewing(PreviewMode.Bar, { kind: "needInvite", allowedVia: [] });
+            vi.spyOn(stores.roomViewStore, "getRoomSummary").mockReturnValue({
+                room_id: room.roomId,
+                num_joined_members: 42,
+                world_readable: false,
+                guest_can_join: false,
+                name: "Coffee break",
+                topic: "Where we drink coffee",
+            });
+            const { container } = await mountRoomView();
+            const identity = container.querySelector(".mx_RoomPreviewBar_identity");
+            expect(identity).toHaveTextContent("Coffee break");
+            expect(identity).toHaveTextContent("Where we drink coffee");
+            expect(container.querySelector(".mx_RoomPreviewBar")).toHaveTextContent(
+                "You need an invite in order to join this room.",
+            );
+        });
+
         it("keeps the legacy Jitsi card for a video room the user is not in", async () => {
             room.isElementVideoRoom = () => true;
             previewing(PreviewMode.Bar);

@@ -80,6 +80,8 @@ describe("<SendMessageComposer/>", () => {
         msc3946ProcessDynamicPredecessor: false,
         previewMode: PreviewMode.Loading,
         previewCta: { kind: "needInvite", allowedVia: [] },
+        roomSummary: null,
+        summaryError: null,
         promptAskToJoin: false,
         askToJoinCancelled: false,
         viewRoomOpts: { buttons: [] },

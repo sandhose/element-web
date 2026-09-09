@@ -18,21 +18,6 @@ exports[`<RoomPreviewBar /> > message case AskToJoin > renders the corresponding
 <div
   class="mx_RoomPreviewBar_message"
 >
-  <h3>
-    Ask to join RoomPreviewBar-test-room?
-  </h3>
-  <p>
-    <span
-      class="_avatar_va14e_8 mx_BaseAvatar _avatar-imageless_va14e_55"
-      data-color="6"
-      data-testid="avatar-img"
-      data-type="round"
-      role="presentation"
-      style="--cpd-avatar-size: 36px;"
-    >
-      R
-    </span>
-  </p>
   <p>
     You need to be granted access to this room in order to view or participate in the conversation. You can send a request to join below.
   </p>
@@ -43,21 +28,6 @@ exports[`<RoomPreviewBar /> > message case AskToJoin > renders the corresponding
 <div
   class="mx_RoomPreviewBar_message"
 >
-  <h3>
-    Ask to join RoomPreviewBar-test-room?
-  </h3>
-  <p>
-    <span
-      class="_avatar_va14e_8 mx_BaseAvatar _avatar-imageless_va14e_55"
-      data-color="6"
-      data-testid="avatar-img"
-      data-type="round"
-      role="presentation"
-      style="--cpd-avatar-size: 36px;"
-    >
-      R
-    </span>
-  </p>
   <p>
     You need to be granted access to this room in order to view or participate in the conversation. You can send a request to join below.
   </p>
@@ -107,9 +77,9 @@ exports[`<RoomPreviewBar /> > message case Knocked > renders the corresponding m
 <div
   class="mx_RoomPreviewBar_message"
 >
-  <h3>
+  <p>
     Request to join sent
-  </h3>
+  </p>
   <p>
     <svg
       class="mx_Icon mx_Icon_16 mx_RoomPreviewBar_icon"
@@ -123,7 +93,7 @@ exports[`<RoomPreviewBar /> > message case Knocked > renders the corresponding m
         d="M12 18.156q.478 0 .802-.323.323-.324.323-.802h-2.25q0 .478.323.802.324.323.802.323M8.063 16.47h7.874a.54.54 0 0 0 .394-.169.54.54 0 0 0 0-.788.54.54 0 0 0-.393-.168h-.563V12.7q0-1.237-.675-2.25a3 3 0 0 0-1.856-1.294v-.281a.82.82 0 0 0-.24-.605.82.82 0 0 0-.604-.239.82.82 0 0 0-.844.844v.281A3 3 0 0 0 9.3 10.45a3.97 3.97 0 0 0-.675 2.25v2.644h-.562a.54.54 0 0 0-.394.168.54.54 0 0 0 0 .788.54.54 0 0 0 .394.169M3 19.844V9.719q0-.534.24-1.013.238-.478.66-.787l6.75-5.063q.31-.225.647-.337.338-.113.703-.113.366 0 .703.113.337.112.647.337L20.1 7.92q.422.309.66.787.24.479.24 1.013v10.125q0 .927-.66 1.589-.662.66-1.59.66H5.25q-.928 0-1.59-.66-.66-.66-.66-1.59m2.25 0h13.5V9.719L12 4.656 5.25 9.72z"
       />
     </svg>
-    Your request to join is pending.
+    You will receive an invite to join the room if your request is accepted.
   </p>
 </div>
 `;
@@ -132,9 +102,9 @@ exports[`<RoomPreviewBar /> > renders banned message 1`] = `
 <div
   class="mx_RoomPreviewBar_message"
 >
-  <h3>
-    You were banned from RoomPreviewBar-test-room by @kicker:test.com
-  </h3>
+  <p>
+    You were banned by @kicker:test.com
+  </p>
   <p>
     Reason: test reason
   </p>
@@ -145,9 +115,9 @@ exports[`<RoomPreviewBar /> > renders denied request message 1`] = `
 <div
   class="mx_RoomPreviewBar_message"
 >
-  <h3>
+  <p>
     You have been denied access
-  </h3>
+  </p>
   <p>
     As you have been denied access, you cannot rejoin unless you are invited by the admin or moderator of the group.
   </p>
@@ -180,11 +150,7 @@ exports[`<RoomPreviewBar /> > renders viewing room message when room an be previ
 exports[`<RoomPreviewBar /> > renders viewing room message when room can not be previewed 1`] = `
 <div
   class="mx_RoomPreviewBar_message"
->
-  <h3>
-    RoomPreviewBar-test-room can't be previewed. Do you want to join it?
-  </h3>
-</div>
+/>
 `;
 
 exports[`<RoomPreviewBar /> > with an error > renders other errors 1`] = `
